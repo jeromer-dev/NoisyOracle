@@ -3,11 +3,11 @@ package experiments;
 import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.ArrayList;
 
 import tools.data.Dataset;
 import tools.functions.singlevariate.FunctionParameters;
@@ -29,21 +29,28 @@ public class ExperimentNoisyLETRID {
 
     public static void main(String[] args) {
         try {
-            System.out.println("=== Lancement de l'expérience Noisy-LETRID ===");
+            System.out.println("=== Lancement de l'expérience Noisy-LETRID (Tic-Tac-Toe) ===");
 
             // --- 1. Chargement et Configuration ---
             String expDir = "src/test/resources/";
-            String filename = "iris.dat";
-            // Codes des classes pour Iris (tels que lus dans le fichier dat)
-            Set<String> consequents = new HashSet<>(Arrays.asList("12", "13", "14"));
+            
+            // CHANGEMENT DE DATASET : Tic-Tac-Toe
+            String filename = "tictactoe.dat";
+            // Les classes dans ce dataset sont généralement "positive" et "negative"
+            Set<String> consequents = new HashSet<>(Arrays.asList("positive", "negative"));
             
             Dataset dataset = new Dataset(filename, expDir, consequents);
-            System.out.println("Dataset chargé. Transactions : " + dataset.getNbTransactions());
-
-            // Mesures : attention à la casse (minuscules)
-            String[] measureNames = {"support", "confidence", "lift"}; 
+            System.out.println("Dataset chargé : " + filename);
+            System.out.println(" - Transactions : " + dataset.getNbTransactions());
             
-            int maxIterations = 50; 
+            // Si le chargement échoue (0 transactions), on arrête
+            if (dataset.getNbTransactions() == 0) {
+                System.err.println("Erreur: Dataset vide ou mal lu.");
+                return;
+            }
+
+            String[] measureNames = {"support", "confidence", "lift"}; 
+            int maxIterations = 100; // On augmente un peu le budget pour ce dataset plus complexe
             double alpha = 0.5;
 
             // --- 2. Préparation des composants ---
@@ -60,32 +67,25 @@ public class ExperimentNoisyLETRID {
                 maxIterations, alpha, safeGus, correctionStrategy, noisyOracle, config
             );
 
-            // --- 3. Génération du Jeu de Test (Nettoyé) ---
-            List<DecisionRule> rawRules = dataset.getRandomValidRules(300, 0.1, measureNames);
+            // --- 3. Génération du Jeu de Test ---
+            // On génère plus de règles pour avoir une évaluation plus fine
+            List<DecisionRule> rawRules = dataset.getRandomValidRules(400, 0.1, measureNames);
             List<DecisionRule> testRules = new ArrayList<>();
-            
-            // On filtre pour éviter les doublons parfaits
             for (DecisionRule r : rawRules) {
                 boolean isDuplicate = false;
                 for (DecisionRule existing : testRules) {
-                    if (existing.equals(r)) {
-                        isDuplicate = true;
-                        break;
-                    }
+                    if (existing.equals(r)) { isDuplicate = true; break; }
                 }
-                if (!isDuplicate) {
-                    testRules.add(r);
-                }
+                if (!isDuplicate) testRules.add(r);
                 if (testRules.size() >= 200) break;
             }
             System.out.println("Règles de test uniques générées : " + testRules.size());
 
-            // --- 4. Système de Monitoring ---
-            String outputCsv = "results_noisy_letrid.csv";
+            // --- 4. Monitoring & Lancement ---
+            String outputCsv = "results_tictactoe.csv";
             BufferedWriter writer = new BufferedWriter(new FileWriter(outputCsv));
             writer.write("Iteration,Accuracy\n"); 
 
-            // Observateur
             noisyAlgo.addObserver(evt -> {
                 if ("step".equals(evt.getPropertyName())) {
                     NoisyLearnStep step = (NoisyLearnStep) evt.getNewValue();
@@ -93,7 +93,6 @@ public class ExperimentNoisyLETRID {
                     int iteration = step.getIteration();
 
                     double accuracy = computeAccuracy(currentModel, noisyOracle, testRules);
-                    
                     System.out.println(">>> Iteration " + iteration + " | Précision: " + String.format("%.2f", accuracy * 100) + "%");
                     
                     try {
@@ -103,12 +102,20 @@ public class ExperimentNoisyLETRID {
                 }
             });
 
-            // --- 5. Lancement ---
             System.out.println("Début de l'apprentissage...");
-            noisyAlgo.learn();
+            FunctionParameters finalParams = noisyAlgo.learn();
             
             writer.close();
             System.out.println("Expérience terminée.");
+            
+            // Affichage des poids appris pour analyse
+            System.out.println("\n--- Poids Appris ---");
+            if (finalParams.getWeights() != null) {
+                double[] w = finalParams.getWeights();
+                for(int i=0; i<w.length && i<measureNames.length; i++) {
+                    System.out.println(measureNames[i] + ": " + String.format("%.4f", w[i]));
+                }
+            }
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -124,36 +131,18 @@ public class ExperimentNoisyLETRID {
             DecisionRule r2 = rules.get(i+1);
 
             try {
-                // Vérité terrain (Oracle de base sans bruit)
                 int truth = oracle.compare(r1, r2); 
-                
-                // Si l'oracle est indifférent (scores égaux), on ne compte pas
                 if (truth == 0) continue; 
                 
-                // Calcul des scores par le modèle courant
                 double score1 = model.computeScore(r1);
                 double score2 = model.computeScore(r2);
                 DecisionRule predictedWinner = (score1 >= score2) ? r1 : r2;
-                
-                // ArtificialOracle retourne -1 si r1 est meilleur, 1 si r2 est meilleur
-                DecisionRule trueWinner = (truth < 0) ? r1 : r2;
+                DecisionRule trueWinner = (truth < 0) ? r1 : r2; // -1 = r1 > r2
     
-                if (predictedWinner.equals(trueWinner)) {
-                    correct++;
-                }
+                if (predictedWinner.equals(trueWinner)) correct++;
                 total++;
-                
-            } catch (IllegalArgumentException e) {
-                // CORRECTION : On ignore les règles qui font planter le calcul de Phi
-                // Cela évite le crash complet de l'expérience
-                continue;
-            } catch (Exception e) {
-                // Sécurité supplémentaire
-                continue;
-            }
+            } catch (Exception e) { continue; }
         }
-        
-        if (total == 0) return 0.0;
-        return (double) correct / total;
+        return (total == 0) ? 0.0 : (double) correct / total;
     }
 }
