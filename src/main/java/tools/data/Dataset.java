@@ -79,6 +79,7 @@ public class Dataset {
 
         String[][] transactions = getTransactions();
 
+        // Correction : Suppression de la boucle while infinie
         for (String[] transaction : transactions) {
             if (transaction.length > 0) {
                 String classRep = transaction[0];
@@ -103,9 +104,17 @@ public class Dataset {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.trim().isEmpty()) continue;
-                String[] values = line.split("\\s+");
-                String[] transaction = new String[values.length];
-                System.arraycopy(values, 0, transaction, 0, values.length);
+                
+                // CORRECTION 1 : Support des virgules ET espaces (compatible CSV et DAT)
+                String[] values = line.split("[,\\s]+");
+                
+                // Filtrage des éléments vides
+                List<String> validValues = new ArrayList<>();
+                for (String v : values) {
+                    if (!v.isEmpty()) validValues.add(v);
+                }
+                
+                String[] transaction = validValues.toArray(new String[0]);
                 transactions.add(transaction);
             }
         }
@@ -128,56 +137,55 @@ public class Dataset {
         }
     }
 
-    /**
-     * Génère des règles aléatoires valides et calcule leurs supports réels.
-     * C'est crucial pour éviter les erreurs "Illegal value for measure phi".
-     */
+    // CORRECTION 2 : Algorithme robuste pour générer des règles valides
     public List<DecisionRule> getRandomValidRules(int nbRules, double smoothCounts, String[] measureNames) {
         RandomUtil random = new RandomUtil();
-        int nbTransactions = this.getTransactions().length; // 150 pour Iris
+        int nbTransactions = this.getTransactions().length;
         List<DecisionRule> rules = new ArrayList<>();
+        
+        if (nbTransactions == 0) return rules; // Sécurité
 
-        for (int i = 0; i < nbRules; i++) {
+        int attempts = 0;
+        int maxAttempts = nbRules * 100; // Limite pour éviter boucle infinie
+
+        // On boucle tant qu'on n'a pas assez de règles
+        while (rules.size() < nbRules && attempts < maxAttempts) {
+            attempts++;
             int transactionIndex = random.nextInt(nbTransactions);
             String[] transaction = this.getTransactions()[transactionIndex];
 
             List<String> shuffledItems = new ArrayList<>(Arrays.asList(transaction));
             Collections.shuffle(shuffledItems);
 
-            // Création de la règle avec le bon nombre de transactions (N)
-            DecisionRule selectedDecisionRule = new DecisionRule(new HashSet<>(), "", this, nbTransactions, 1, smoothCounts, measureNames);
-
-            boolean consequentSet = false;
+            // Chercher un conséquent valide présent dans la transaction
+            String selectedConsequent = null;
             for (String item : shuffledItems) {
-                if (getAntecedentItemsSet().contains(item)) {
+                if (getConsequentItemsSet().contains(item)) {
+                    selectedConsequent = item;
+                    break;
+                }
+            }
+
+            // Si la transaction ne contient pas de classe cible connue, on passe
+            if (selectedConsequent == null) continue;
+
+            // CORRECTION 3 : Utilisation de nbTransactions (et pas 100)
+            DecisionRule selectedDecisionRule = new DecisionRule(new HashSet<>(), selectedConsequent, this, nbTransactions, 1, smoothCounts, measureNames);
+
+            for (String item : shuffledItems) {
+                if (getAntecedentItemsSet().contains(item) && !item.equals(selectedConsequent)) {
                     if (random.Bernoulli(0.5)) {
                         selectedDecisionRule.addToX(item);
                     }
-                } else if (!consequentSet) {
-                    // On ne définit qu'un seul conséquent par règle
-                    selectedDecisionRule.setY(item);
-                    consequentSet = true;
                 }
             }
             
-            // Si aucun conséquent n'a été trouvé dans la transaction (cas rare mais possible), on en force un aléatoire
-            if (!consequentSet && !getConsequentItemsSet().isEmpty()) {
-                String randomConsequent = getConsequentItemsSet().iterator().next();
-                selectedDecisionRule.setY(randomConsequent);
+            // CORRECTION 4 : On vérifie que la règle couvre au moins un exemple (Z > 0)
+            if (selectedDecisionRule.getFreqZ() > 0) {
+                rules.add(selectedDecisionRule);
             }
-
-            // --- CORRECTION CRUCIALE ---
-            // Il faut recalculer les supports (n_X, n_Y, n_XY) car on a ajouté des items manuellement.
-            // Si DecisionRule ne le fait pas automatiquement à l'ajout, les mesures seront fausses.
-            // On force le recalcul en réinitialisant ou en appelant une méthode de mise à jour si elle existe.
-            // Dans votre architecture, DecisionRule semble calculer les bitsets à la demande.
-            // On va s'assurer que les mesures sont calculées sur des données cohérentes.
-            
-            // Vérification simple : si n_X ou n_Y est 0, Phi peut planter.
-            // Les règles générées ici sont basées sur une transaction existante, donc le support est au moins 1.
-            
-            rules.add(selectedDecisionRule);
         }
+        
         return rules;
     }
 }

@@ -18,7 +18,7 @@ import tools.oracles.INoiseModel;
 import tools.ranking.heuristics.CorrectionStrategy;
 import tools.ranking.heuristics.SafeGUS;
 import tools.train.iterative.NoisyIterativeRankingLearn;
-import tools.train.iterative.NoisyLearnStep; // Import de la classe concrète
+import tools.train.iterative.NoisyLearnStep;
 import tools.utils.NoiseModelConfig;
 import tools.functions.multivariate.PairwiseUncertainty;
 import tools.functions.multivariate.outRankingCertainties.ScoreDifference;
@@ -37,9 +37,16 @@ public class ExperimentNoisyLETRID {
             
             Dataset dataset = new Dataset(filename, expDir, consequents);
             
-            // CORRECTION ICI : Noms des mesures en minuscules ("support", "confidence", "lift")
-            // "GrowthRate" n'est pas standard dans RuleMeasures.java, j'ai mis "lift" à la place qui est sûr.
-            // Si vous tenez à GrowthRate, vérifiez qu'il est bien codé dans RuleMeasures.java
+            // DIAGNOSTIC 1 : Vérifier le dataset
+            System.out.println("Dataset chargé : " + filename);
+            System.out.println(" - Transactions : " + dataset.getNbTransactions());
+            System.out.println(" - Items (Antecedents) : " + dataset.getNbAntecedentItems());
+            if (dataset.getNbTransactions() == 0) {
+                System.err.println("ERREUR CRITIQUE : Le dataset est vide ! Vérifiez le chemin du fichier.");
+                return;
+            }
+
+            // Mesures utilisées (minuscules obligatoires)
             String[] measureNames = {"support", "confidence", "lift"}; 
             
             int maxIterations = 50; 
@@ -49,10 +56,8 @@ public class ExperimentNoisyLETRID {
             INoiseModel noiseModel = new ExponentialNoiseModel(5.0);
             PairwiseUncertainty diffFunction = new PairwiseUncertainty("ScoreDiff", new ScoreDifference(new LinearScoreFunction()));
             
-            // Oracle Bruité (L'humain)
             HumanLikeNoisyOracle noisyOracle = new HumanLikeNoisyOracle(dataset.getNbTransactions(), noiseModel, diffFunction);
 
-            // Algorithme Noisy-LETRID
             NoiseModelConfig config = new NoiseModelConfig(maxIterations, 0.8, 5.0);
             SafeGUS safeGus = new SafeGUS(noisyOracle, dataset, measureNames, config);
             CorrectionStrategy correctionStrategy = new CorrectionStrategy(diffFunction);
@@ -61,25 +66,30 @@ public class ExperimentNoisyLETRID {
                 maxIterations, alpha, safeGus, correctionStrategy, noisyOracle, config
             );
 
-            // --- 3. Système de Monitoring (Log dans CSV) ---
+            // --- 3. Système de Monitoring ---
             String outputCsv = "results_noisy_letrid.csv";
             BufferedWriter writer = new BufferedWriter(new FileWriter(outputCsv));
-            writer.write("Iteration,Accuracy\n"); // En-tête du CSV
+            writer.write("Iteration,Accuracy\n"); 
 
-            // On génère un jeu de test fixe de 200 paires pour évaluer la précision à chaque tour
-            // Note: dataset.getRandomValidRules utilise maintenant measureNames corrigé
+            // Génération du jeu de test
             List<DecisionRule> testRules = dataset.getRandomValidRules(200, 0.1, measureNames);
+            
+            // DIAGNOSTIC 2 : Vérifier les règles générées
+            DecisionRule exemple = testRules.get(0);
+            System.out.println("Exemple de règle générée : " + exemple);
+            System.out.println(" - Fréquences : X=" + exemple.getFreqX() + ", Y=" + exemple.getFreqY() + ", Z=" + exemple.getFreqZ());
+            if (exemple.getFreqZ() == 0) {
+                System.err.println("ATTENTION : La règle exemple a une fréquence nulle. Les règles ne couvrent aucune transaction !");
+            }
 
-            // On s'abonne aux événements de l'algorithme
+            // Observateur
             noisyAlgo.addObserver(evt -> {
                 if ("step".equals(evt.getPropertyName())) {
-                    // On cast vers la classe concrète NoisyLearnStep pour avoir getIteration()
                     NoisyLearnStep step = (NoisyLearnStep) evt.getNewValue();
-                    
                     ISinglevariateFunction currentModel = step.getCurrentScoreFunction();
                     int iteration = step.getIteration();
 
-                    // Calcul de la précision sur le jeu de test
+                    // Calcul de la précision
                     double accuracy = computeAccuracy(currentModel, noisyOracle, testRules);
                     
                     System.out.println(">>> Iteration " + iteration + " | Précision: " + String.format("%.2f", accuracy * 100) + "%");
@@ -94,7 +104,7 @@ public class ExperimentNoisyLETRID {
             });
 
             // --- 4. Lancement ---
-            System.out.println("Début de l'apprentissage... Résultats dans " + outputCsv);
+            System.out.println("Début de l'apprentissage...");
             noisyAlgo.learn();
             
             writer.close();
@@ -105,27 +115,29 @@ public class ExperimentNoisyLETRID {
         }
     }
 
-    /**
-     * Calcule la précision du modèle actuel par rapport à la vérité terrain (Oracle sans bruit).
-     */
     private static double computeAccuracy(ISinglevariateFunction model, HumanLikeNoisyOracle oracle, List<DecisionRule> rules) {
         int correct = 0;
         int total = 0;
 
-        // On compare les règles 2 à 2 dans la liste de test
         for (int i = 0; i < rules.size() - 1; i += 2) {
             DecisionRule r1 = rules.get(i);
             DecisionRule r2 = rules.get(i+1);
 
             double score1 = model.computeScore(r1);
             double score2 = model.computeScore(r2);
-
-            // Prédiction du modèle (qui gagne ?)
             DecisionRule predictedWinner = (score1 >= score2) ? r1 : r2;
 
-            // Vérité terrain (Oracle de base, SANS le bruit)
+            // Vérité terrain
             int truth = oracle.compare(r1, r2); 
-            DecisionRule trueWinner = (truth >= 0) ? r1 : r2;
+            
+            // DIAGNOSTIC 3 : Ignorer les cas où l'oracle ne sait pas décider (scores égaux)
+            if (truth == 0) {
+                // L'oracle est indifférent, on ne compte pas cela comme une erreur ou une réussite
+                // C'est souvent le cas si les règles sont identiques ou nulles
+                continue; 
+            }
+            
+            DecisionRule trueWinner = (truth > 0) ? r1 : r2;
 
             if (predictedWinner.equals(trueWinner)) {
                 correct++;
