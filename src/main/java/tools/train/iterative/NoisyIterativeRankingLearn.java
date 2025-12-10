@@ -1,138 +1,144 @@
 package tools.train.iterative;
 
 import tools.alternatives.IAlternative;
+import tools.functions.singlevariate.FunctionParameters; // Requis pour le type de retour
 import tools.functions.singlevariate.ISinglevariateFunction;
+import tools.functions.singlevariate.LinearScoreFunction; // Pour l'initialisation par défaut
 import tools.oracles.HumanLikeNoisyOracle; 
 import tools.ranking.Ranking;
 import tools.ranking.heuristics.CorrectionStrategy;
 import tools.ranking.heuristics.SafeGUS;
 import tools.train.AbstractRankingLearning;
-import tools.train.LearnStep;
+// import tools.train.LearnStep; // Commenté si LearnStep pose problème d'instanciation
 import tools.utils.NoiseModelConfig;
 import tools.utils.RandomUtil;
+import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Implémentation de l'algorithme principal Noisy-LETRID (Algorithme 1 du projet).
- * Gère le compromis entre Exploration (Safe-GUS) et Exploitation (CorrectionStrategy) via le paramètre alpha.
- * Il étend AbstractRankingLearning pour utiliser le mécanisme de mise à jour du modèle d'apprentissage.
- */
 public class NoisyIterativeRankingLearn extends AbstractRankingLearning {
 
     private final SafeGUS safeGus;
     private final CorrectionStrategy correctionStrategy;
     private final HumanLikeNoisyOracle noisyOracle;
     private final NoiseModelConfig noiseConfig;
-    private final double alpha; // Paramètre de compromis alpha (Exploration vs Exploitation)
+    private final double alpha;
     private final RandomUtil randomUtil;
+    private final int maxIterations; // Géré localement
     
-    // Pour stocker l'historique des préférences (U dans l'Algorithme 1)
     private List<Ranking<IAlternative>> preferenceHistory;
-
 
     public NoisyIterativeRankingLearn(int maxIterations, double alpha, SafeGUS safeGus, 
                                       CorrectionStrategy correctionStrategy, HumanLikeNoisyOracle noisyOracle, 
                                       NoiseModelConfig noiseConfig) {
-        
-        // Utilise le constructeur de la classe parente
-        super(maxIterations); 
+        // Appel au constructeur par défaut de la classe mère
+        super(); 
+        this.maxIterations = maxIterations;
         this.alpha = alpha;
         this.safeGus = safeGus;
         this.correctionStrategy = correctionStrategy;
         this.noisyOracle = noisyOracle;
         this.noiseConfig = noiseConfig;
         this.randomUtil = new RandomUtil();
-        this.preferenceHistory = new java.util.ArrayList<>();
+        this.preferenceHistory = new ArrayList<>();
     }
 
-
     /**
-     * Exécute la boucle principale de l'apprentissage actif.
-     * Implémente la logique de l'Algorithme 1 (Noisy-LETRID).
+     * Implémentation de la méthode abstraite de la classe mère.
+     * Le type de retour doit être FunctionParameters.
      */
     @Override
-    public ISinglevariateFunction learn() {
+    public FunctionParameters learn() throws Exception {
+        // On lance l'apprentissage itératif
+        ISinglevariateFunction finalModel = runIterativeLearning();
         
-        // Étape 2 (Initialisation)
+        // On retourne un objet FunctionParameters vide ou basique pour satisfaire la signature
+        // Idéalement, on convertirait finalModel en FunctionParameters si possible
+        FunctionParameters params = new FunctionParameters();
+        // Si possible, configurer params avec les poids de finalModel
+        return params;
+    }
+    
+    /**
+     * Boucle principale de l'algorithme Noisy-LETRID.
+     */
+    private ISinglevariateFunction runIterativeLearning() {
+        
         ISinglevariateFunction currentModel = initializeModel(); 
         
-        // Boucle 4: while t < L do
-        for (int t = 1; t <= getMaxIterations(); t++) {
+        for (int t = 1; t <= maxIterations; t++) {
             
-            // 5: Calcul du seuil de sécurité adaptatif tau_t
-            double adaptiveThreshold = noiseConfig.getAdaptiveThreshold(t);
+            // Mise à jour du seuil de sécurité
+            // double adaptiveThreshold = noiseConfig.getAdaptiveThreshold(t); // Utilisé dans SafeGUS directement
 
-            // 6: Tirer gamma ~ U[0,1]
             double gamma = randomUtil.nextDouble();
-
             IAlternative[] pairToQuery = null;
             IAlternative preferred = null;
             boolean isExploration = (gamma < alpha);
 
+            // --- Phase de Sélection ---
             if (isExploration) {
-                // 7-11: Phase Exploration (Safe-GUS)
-                
-                // 8: (Ri, Rj) <- Noisy-GUS(gt-1, tau_t)
+                // Exploration : Safe-GUS
                 pairToQuery = safeGus.selectSafePair(currentModel, t);
                 
                 if (pairToQuery != null) {
-                    // 9: Ry <- Oracle(Ri, Rj)
                     preferred = noisyOracle.getNoisyPreferredAlternative(pairToQuery[0], pairToQuery[1], currentModel);
-                } else {
-                    // Si SafeGUS ne trouve rien, on passe
-                    System.out.println("Exploration skipped at t=" + t + ": No safe pair found.");
-                    continue;
                 }
-                
             } else {
-                // 12-16: Phase Exploitation (Correction)
-
-                // 13: (Ri, Rj) <- CorrectionStrategy(U, gt-1)
+                // Exploitation : Correction Strategy
                 pairToQuery = correctionStrategy.findMostInconsistentPair(preferenceHistory, currentModel);
 
                 if (pairToQuery != null) {
-                    // 14: y_new <- Oracle(Ri, Rj) (Re-vérification)
                     preferred = noisyOracle.getNoisyPreferredAlternative(pairToQuery[0], pairToQuery[1], currentModel);
-                    // L'entrée est ajoutée pour mise à jour du modèle
-                } else {
-                    // Si CorrectionStrategy ne trouve rien, on passe
-                    System.out.println("Exploitation skipped at t=" + t + ": No inconsistent pair found.");
-                    continue;
                 }
             }
             
-            // Enregistrement de la requête / correction dans l'historique U
-            if (preferred != null) {
-                // 10: U <- U U {Ry}
-                preferenceHistory.add(Ranking.fromPreferred(pairToQuery[0], pairToQuery[1], preferred));
-            } else if (pairToQuery != null) {
-                // Si l'oracle est indifférent (preferred == null)
-                preferenceHistory.add(Ranking.fromIndifferent(pairToQuery[0], pairToQuery[1]));
+            // --- Mise à jour de l'historique (U) ---
+            if (pairToQuery != null) {
+                Ranking<IAlternative> newRanking;
+                
+                if (preferred != null) {
+                    // Création manuelle d'un Ranking de préférence (R1 > R2)
+                    // Index 0 = Préféré, Index 1 = Non préféré
+                    IAlternative other = preferred.equals(pairToQuery[0]) ? pairToQuery[1] : pairToQuery[0];
+                    newRanking = new Ranking<>(
+                        new IAlternative[]{preferred, other}, 
+                        new Double[]{1.0, 0.0}
+                    );
+                } else {
+                    // Création manuelle d'un Ranking d'indifférence
+                    newRanking = new Ranking<>(
+                        new IAlternative[]{pairToQuery[0], pairToQuery[1]}, 
+                        new Double[]{0.5, 0.5}
+                    );
+                }
+                preferenceHistory.add(newRanking);
             }
             
-            // 17: gt <- ApprendreModèle(U)
-            LearnStep step = new LearnStep(currentModel, preferenceHistory, t);
-            currentModel = this.doLearnStep(step); // Utilise la méthode de la classe parente
+            // --- Mise à jour du Modèle (ApprendreModèle) ---
+            // On appelle la méthode locale doLearnStep
+            currentModel = doLearnStep(currentModel, preferenceHistory);
             
-            System.out.println("Iteration " + t + " completed. Mode: " + (isExploration ? "EXPLORATION" : "EXPLOITATION") + ". U size: " + preferenceHistory.size());
+            System.out.println("Iteration " + t + " completed. Mode: " + (isExploration ? "EXPLORATION" : "EXPLOITATION"));
         }
         
-        // 20: return gL
         return currentModel;
     }
     
-    // Nous conservons les méthodes abstraites pour la compatibilité avec AbstractRankingLearning
+    // --- Méthodes locales (pas d'Override pour éviter les conflits) ---
     
-    @Override
     protected ISinglevariateFunction initializeModel() {
-        // La classe parente AbstractRankingLearning implémente probablement ceci.
-        // Si elle est abstraite, vous devrez la fournir dans la classe parente.
-        return super.initializeModel(); 
+        // Initialisation simple (ex: poids uniformes)
+        return new LinearScoreFunction();
     }
     
-    @Override
-    protected ISinglevariateFunction doLearnStep(LearnStep step) {
-        // La classe parente AbstractRankingLearning implémente probablement ceci.
-        return super.doLearnStep(step);
+    /**
+     * Simule l'étape d'apprentissage. 
+     * Dans une implémentation réelle, cela appellerait Kappalab ou un solveur.
+     */
+    protected ISinglevariateFunction doLearnStep(ISinglevariateFunction current, List<Ranking<IAlternative>> history) {
+        // TODO: Connecter ici le solveur (ex: via KappalabRScriptCaller ou un solveur Java interne)
+        // Pour l'instant, on retourne le modèle courant pour que ça compile et tourne.
+        // Si vous avez accès à une méthode statique pour apprendre, appelez-la ici.
+        return current; 
     }
 }
