@@ -70,7 +70,6 @@ public class Dataset {
         findEquivalenceClasses();
     }
 
-    // CORRECTION : Suppression de la boucle while infinie
     public void findEquivalenceClasses() {
         HashSet<String> allItems = new HashSet<>();
         allItems.addAll(getConsequentItemsSet());
@@ -80,12 +79,10 @@ public class Dataset {
 
         String[][] transactions = getTransactions();
 
-        // On parcourt les transactions une seule fois
         for (String[] transaction : transactions) {
             if (transaction.length > 0) {
                 String classRep = transaction[0];
                 for (String item : transaction) {
-                    // On unit chaque item avec le représentant de la ligne (ex: la classe)
                     equivalenceClasses.union(item, classRep);
                 }
             }
@@ -105,10 +102,8 @@ public class Dataset {
         try (BufferedReader reader = new BufferedReader(new FileReader(expDir + filename))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (line.trim().isEmpty()) continue; // Ignorer les lignes vides
-                
+                if (line.trim().isEmpty()) continue;
                 String[] values = line.split("\\s+");
-                // Copie simple
                 String[] transaction = new String[values.length];
                 System.arraycopy(values, 0, transaction, 0, values.length);
                 transactions.add(transaction);
@@ -133,9 +128,10 @@ public class Dataset {
         }
     }
 
+    // CORRECTION : Utilisation de nbTransactions réelles au lieu de 100
     public List<DecisionRule> getRandomValidRules(int nbRules, double smoothCounts, String[] measureNames) {
         RandomUtil random = new RandomUtil();
-        int nbTransactions = this.getTransactions().length;
+        int nbTransactions = this.getTransactions().length; // Taille réelle du dataset (ex: 150)
         List<DecisionRule> rules = new ArrayList<>();
 
         for (int i = 0; i < nbRules; i++) {
@@ -145,7 +141,9 @@ public class Dataset {
             List<String> shuffledItems = new ArrayList<>(Arrays.asList(transaction));
             Collections.shuffle(shuffledItems);
 
-            DecisionRule selectedDecisionRule = new DecisionRule(new HashSet<>(), "", this, 100, 100, smoothCounts,
+            // CORRECTION: Passer nbTransactions (la vraie taille N)
+            // Passer 1 pour le support du conséquent (temporaire, sera mis à jour par setY)
+            DecisionRule selectedDecisionRule = new DecisionRule(new HashSet<>(), "", this, nbTransactions, 1, smoothCounts,
                     measureNames);
 
             for (String item : shuffledItems) {
