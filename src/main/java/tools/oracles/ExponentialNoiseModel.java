@@ -10,7 +10,7 @@ import tools.utils.RandomUtil;
 /**
  * Abstract class representing a score-based oracle for comparing alternatives.
  */
-public abstract class ArtificialOracle implements Oracle{
+public abstract class ExponentialNoiseModel implements Oracle{
     private @Getter RandomUtil random = new RandomUtil();
 
     /**
