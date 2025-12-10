@@ -8,7 +8,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import tools.alternatives.IAlternative;
 import tools.data.Dataset;
 import tools.functions.singlevariate.FunctionParameters;
 import tools.functions.singlevariate.ISinglevariateFunction;
@@ -18,8 +17,9 @@ import tools.oracles.HumanLikeNoisyOracle;
 import tools.oracles.INoiseModel;
 import tools.ranking.heuristics.CorrectionStrategy;
 import tools.ranking.heuristics.SafeGUS;
-import tools.train.LearnStep;
+// import tools.train.LearnStep; // On n'utilise plus l'interface directement ici
 import tools.train.iterative.NoisyIterativeRankingLearn;
+import tools.train.iterative.NoisyLearnStep; // Import nécessaire
 import tools.utils.NoiseModelConfig;
 import tools.functions.multivariate.PairwiseUncertainty;
 import tools.functions.multivariate.outRankingCertainties.ScoreDifference;
@@ -62,15 +62,17 @@ public class ExperimentNoisyLETRID {
             BufferedWriter writer = new BufferedWriter(new FileWriter(outputCsv));
             writer.write("Iteration,Accuracy\n"); // En-tête du CSV
 
-            // On génère un jeu de test fixe de 100 paires pour évaluer la précision à chaque tour
+            // On génère un jeu de test fixe de 200 paires pour évaluer la précision à chaque tour
             List<DecisionRule> testRules = dataset.getRandomValidRules(200, 0.1, measureNames);
 
             // On s'abonne aux événements de l'algorithme
             noisyAlgo.addObserver(evt -> {
                 if ("step".equals(evt.getPropertyName())) {
-                    LearnStep step = (LearnStep) evt.getNewValue();
+                    // CORRECTION ICI : On cast vers la classe concrète NoisyLearnStep
+                    NoisyLearnStep step = (NoisyLearnStep) evt.getNewValue();
+                    
                     ISinglevariateFunction currentModel = step.getCurrentScoreFunction();
-                    int iteration = step.getIteration();
+                    int iteration = step.getIteration(); // Maintenant cette méthode est accessible
 
                     // Calcul de la précision sur le jeu de test
                     double accuracy = computeAccuracy(currentModel, noisyOracle, testRules);
@@ -126,6 +128,9 @@ public class ExperimentNoisyLETRID {
             }
             total++;
         }
+        // Évite la division par zéro
+        if (total == 0) return 0.0;
+        
         return (double) correct / total;
     }
 }
