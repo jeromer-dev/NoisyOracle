@@ -24,48 +24,57 @@ import tools.utils.NoiseModelConfig;
 import tools.functions.multivariate.PairwiseUncertainty;
 import tools.functions.multivariate.outRankingCertainties.ScoreDifference;
 import tools.rules.DecisionRule;
-// import tools.rules.IRule; // Plus nécessaire ici
 
 public class ExperimentNoisyLETRID {
 
     public static void main(String[] args) {
         try {
-            System.out.println("=== Lancement de l'expérience Noisy-LETRID ===");
+            System.out.println("=== Lancement de l'expérience Noisy-LETRID (Tic-Tac-Toe) ===");
 
             // --- 1. Chargement et Configuration ---
             String expDir = "src/test/resources/";
-            String filename = "iris.dat";
-            // Codes des classes pour Iris
-            Set<String> consequents = new HashSet<>(Arrays.asList("12", "13", "14"));
+            
+            // MODIFICATION 1 : Fichier Tic-Tac-Toe
+            String filename = "tictactoe.dat";
+            
+            // MODIFICATION 2 : Les classes identifiées dans le fichier sont 28 et 29
+            Set<String> consequents = new HashSet<>(Arrays.asList("28", "29"));
             
             Dataset dataset = new Dataset(filename, expDir, consequents);
-            System.out.println("Dataset chargé. Transactions : " + dataset.getNbTransactions());
+            System.out.println("Dataset chargé : " + filename);
+            System.out.println(" - Transactions : " + dataset.getNbTransactions());
+            
+            // Diagnostic si le chargement échoue
+            if (dataset.getNbTransactions() == 0) {
+                System.err.println("ERREUR : Dataset vide ou mal lu. Vérifiez le format du fichier.");
+                return;
+            }
 
             String[] measureNames = {"support", "confidence", "lift"}; 
-            int maxIterations = 50; 
+            
+            // MODIFICATION 3 : Plus d'itérations pour un problème plus complexe
+            int maxIterations = 100; 
             double alpha = 0.5;
 
             // --- 2. Préparation des composants ---
             INoiseModel noiseModel = new ExponentialNoiseModel(5.0);
             PairwiseUncertainty diffFunction = new PairwiseUncertainty("ScoreDiff", new ScoreDifference(new LinearScoreFunction()));
             
-            // CORRECTION : Surcharge avec DecisionRule au lieu de IRule
+            // Oracle avec comportement "Tie-Breaker" pour éviter l'indécision
             HumanLikeNoisyOracle noisyOracle = new HumanLikeNoisyOracle(dataset.getNbTransactions(), noiseModel, diffFunction) {
                 @Override
                 public int compare(DecisionRule r1, DecisionRule r2) {
                     double s1 = this.computeScore(r1);
                     double s2 = this.computeScore(r2);
                     
-                    if (s1 > s2) return -1; // r1 gagne
-                    if (s2 > s1) return 1;  // r2 gagne
+                    if (s1 > s2) return -1;
+                    if (s2 > s1) return 1;
                     
-                    // En cas d'égalité stricte du Chi2, on tranche par le Support (freqZ)
-                    int f1 = r1.getFreqZ();
-                    int f2 = r2.getFreqZ();
-                    if (f1 > f2) return -1;
-                    if (f2 > f1) return 1;
+                    // En cas d'égalité Chi2, on départage par le Support
+                    if (r1.getFreqZ() > r2.getFreqZ()) return -1;
+                    if (r2.getFreqZ() > r1.getFreqZ()) return 1;
                     
-                    // Si toujours égalité, on tranche arbitrairement
+                    // Dernier recours : Hashcode pour garantir une décision
                     return (r1.hashCode() > r2.hashCode()) ? -1 : 1;
                 }
             };
@@ -78,24 +87,32 @@ public class ExperimentNoisyLETRID {
                 maxIterations, alpha, safeGus, correctionStrategy, noisyOracle, config
             );
 
-            // --- 3. Génération du Jeu de Test ---
-            List<DecisionRule> rawRules = dataset.getRandomValidRules(300, 0.1, measureNames);
-            List<DecisionRule> testRules = new ArrayList<>();
-            for (DecisionRule r : rawRules) {
-                boolean isDuplicate = false;
-                for (DecisionRule existing : testRules) {
-                    if (existing.equals(r)) { isDuplicate = true; break; }
-                }
-                if (!isDuplicate) testRules.add(r);
-                if (testRules.size() >= 200) break;
-            }
-            System.out.println("Règles de test uniques générées : " + testRules.size());
-
-            // --- 4. Monitoring & Lancement ---
-            String outputCsv = "results_noisy_letrid.csv";
+            // --- 3. Monitoring & Jeu de Test ---
+            String outputCsv = "results_tictactoe.csv";
             BufferedWriter writer = new BufferedWriter(new FileWriter(outputCsv));
             writer.write("Iteration,Accuracy\n"); 
 
+            // Génération d'un jeu de test plus large (300 brutes -> filtrées)
+            List<DecisionRule> rawRules = dataset.getRandomValidRules(400, 0.1, measureNames);
+            List<DecisionRule> testRules = new ArrayList<>();
+            for (DecisionRule r : rawRules) {
+                // Filtre les doublons
+                boolean exists = false;
+                for (DecisionRule ex : testRules) {
+                    if (ex.equals(r)) { exists = true; break; }
+                }
+                if (!exists) testRules.add(r);
+                if (testRules.size() >= 200) break;
+            }
+            
+            if (testRules.isEmpty()) {
+                System.err.println("ERREUR : Impossible de générer des règles de test valides.");
+                writer.close();
+                return;
+            }
+            System.out.println("Règles de test uniques générées : " + testRules.size());
+
+            // --- 4. Lancement ---
             noisyAlgo.addObserver(evt -> {
                 if ("step".equals(evt.getPropertyName())) {
                     NoisyLearnStep step = (NoisyLearnStep) evt.getNewValue();
@@ -119,7 +136,7 @@ public class ExperimentNoisyLETRID {
             System.out.println("Expérience terminée.");
             
             // Affichage des poids appris
-            System.out.println("\nPoids appris :");
+            System.out.println("\nPoids appris (Tic-Tac-Toe) :");
             if (finalParams.getWeights() != null) {
                 for (int i = 0; i < finalParams.getWeights().length; i++) {
                     System.out.println(measureNames[i] + ": " + String.format("%.4f", finalParams.getWeights()[i]));
@@ -140,17 +157,20 @@ public class ExperimentNoisyLETRID {
             DecisionRule r2 = rules.get(i+1);
 
             try {
-                // On utilise notre oracle "Tie-Breaker" ici aussi
+                // Utilisation de l'oracle surchargé (compare)
                 int truth = oracle.compare(r1, r2); 
                 
+                // Prédiction du modèle
                 double score1 = model.computeScore(r1);
                 double score2 = model.computeScore(r2);
                 DecisionRule predictedWinner = (score1 >= score2) ? r1 : r2;
                 
-                // -1 = r1 est mieux, 1 = r2 est mieux
+                // Vérité (-1 = r1 gagne)
                 DecisionRule trueWinner = (truth < 0) ? r1 : r2;
     
-                if (predictedWinner.equals(trueWinner)) correct++;
+                if (predictedWinner.equals(trueWinner)) {
+                    correct++;
+                }
                 total++;
                 
             } catch (Exception e) { continue; }
