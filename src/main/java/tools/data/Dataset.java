@@ -25,7 +25,6 @@ public class Dataset {
 
     private String filename;
     private String expDir;
-
     private @Setter @Getter Map<String, SparseBitSet> itemsMap; 
     private @Setter @Getter Set<String> consequentItemsSet; 
     private @Setter @Getter Set<String> antecedentItemsSet; 
@@ -40,18 +39,14 @@ public class Dataset {
     public Dataset(String filename, String expDir, Set<String> consequentItemsSet) throws IOException {
         this.filename = filename;
         this.expDir = expDir;
-
         this.transactions = getTransactionalDataset();
         this.nbTransactions = this.transactions.length;
         getItemsFromTransactions();
-
         setConsequentItemsSet(consequentItemsSet);
         setConsequentItemsArray(getConsequentItemsSet().toArray(new String[0]));
         initializeAntecedentItemsValues();
-
         this.nbAntecedentItems = getAntecedentItemsSet().size();
         this.nbConsequentItems = getConsequentItemsSet().size();
-
         findEquivalenceClasses();
     }
 
@@ -59,14 +54,11 @@ public class Dataset {
         this.transactions = transactionalDataset;
         this.nbTransactions = transactionalDataset.length;
         getItemsFromTransactions();
-
         setConsequentItemsSet(consequentItemsSet);
         setConsequentItemsArray(getConsequentItemsSet().toArray(new String[0]));
         initializeAntecedentItemsValues();
-
         this.nbAntecedentItems = getAntecedentItemsSet().size();
         this.nbConsequentItems = getConsequentItemsSet().size();
-
         findEquivalenceClasses();
     }
 
@@ -74,12 +66,8 @@ public class Dataset {
         HashSet<String> allItems = new HashSet<>();
         allItems.addAll(getConsequentItemsSet());
         allItems.addAll(getAntecedentItemsSet());
-
         this.equivalenceClasses = new UnionFind(allItems.toArray(new String[0]));
-
         String[][] transactions = getTransactions();
-
-        // Correction boucle infinie
         for (String[] transaction : transactions) {
             if (transaction.length > 0) {
                 String classRep = transaction[0];
@@ -99,32 +87,20 @@ public class Dataset {
 
     public String[][] getTransactionalDataset() throws IOException {
         List<String[]> transactions = new ArrayList<>();
-
         try (BufferedReader reader = new BufferedReader(new FileReader(expDir + filename))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.trim().isEmpty()) continue;
-                
-                // --- CORRECTION MAJEURE ---
-                // On coupe sur les virgules (,) OU les espaces (\\s)
-                // Cela permet de lire iris.dat correctement
-                String[] values = line.split("[,\\s]+"); 
-                
+                String[] values = line.split("[,\\s]+"); // Sépare par virgule ou espace
                 List<String> validValues = new ArrayList<>();
-                for (String v : values) {
-                    if (!v.isEmpty()) validValues.add(v);
-                }
-                
-                String[] transaction = validValues.toArray(new String[0]);
-                transactions.add(transaction);
+                for (String v : values) if (!v.isEmpty()) validValues.add(v);
+                transactions.add(validValues.toArray(new String[0]));
             }
         }
-
         String[][] transactionArray = new String[transactions.size()][];
         for (int i = 0; i < transactions.size(); i++) {
             transactionArray[i] = transactions.get(i);
         }
-
         return transactionArray;
     }
 
@@ -138,22 +114,16 @@ public class Dataset {
         }
     }
 
-    // Méthode corrigée pour générer des règles valides
     public List<DecisionRule> getRandomValidRules(int nbRules, double smoothCounts, String[] measureNames) {
         RandomUtil random = new RandomUtil();
-        int nbTransactions = this.getTransactions().length; 
+        int nbTransactions = this.getTransactions().length;
         List<DecisionRule> rules = new ArrayList<>();
-        
-        if (nbTransactions == 0) return rules;
-
         int attempts = 0;
-        int maxAttempts = nbRules * 200; // Augmentation du nombre d'essais
-
-        while (rules.size() < nbRules && attempts < maxAttempts) {
+        
+        while (rules.size() < nbRules && attempts < nbRules * 200) {
             attempts++;
             int transactionIndex = random.nextInt(nbTransactions);
             String[] transaction = this.getTransactions()[transactionIndex];
-
             List<String> shuffledItems = new ArrayList<>(Arrays.asList(transaction));
             Collections.shuffle(shuffledItems);
 
@@ -164,31 +134,17 @@ public class Dataset {
                     break;
                 }
             }
-
             if (selectedConsequent == null) continue;
 
-            // Utilisation du bon nombre de transactions
             DecisionRule selectedDecisionRule = new DecisionRule(new HashSet<>(), selectedConsequent, this, nbTransactions, 1, smoothCounts, measureNames);
 
             for (String item : shuffledItems) {
                 if (getAntecedentItemsSet().contains(item) && !item.equals(selectedConsequent)) {
-                    if (random.Bernoulli(0.5)) {
-                        selectedDecisionRule.addToX(item);
-                    }
+                    if (random.Bernoulli(0.5)) selectedDecisionRule.addToX(item);
                 }
             }
-            
-            // On vérifie que la règle couvre au moins un exemple
-            if (selectedDecisionRule.getFreqZ() > 0) {
-                rules.add(selectedDecisionRule);
-            }
+            if (selectedDecisionRule.getFreqZ() > 0) rules.add(selectedDecisionRule);
         }
-        
-        // Petit message de debug si on n'a pas tout trouvé
-        if (rules.size() < nbRules) {
-            System.out.println("Attention: Seulement " + rules.size() + " règles générées sur " + nbRules);
-        }
-        
         return rules;
     }
 }

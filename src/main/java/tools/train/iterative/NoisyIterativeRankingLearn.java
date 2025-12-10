@@ -11,7 +11,6 @@ import tools.oracles.HumanLikeNoisyOracle;
 import tools.ranking.Ranking;
 import tools.ranking.heuristics.CorrectionStrategy;
 import tools.ranking.heuristics.SafeGUS;
-import tools.rules.DecisionRule;
 import tools.train.IterativeRankingLearn;
 import tools.train.LearnStep;
 import tools.utils.NoiseModelConfig;
@@ -30,7 +29,7 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
     
     private List<Ranking<IAlternative>> preferenceHistory;
     
-    // Stockage local des poids car LinearScoreFunction ne permet pas de les modifier/lire facilement
+    // Stockage local des poids du modèle
     private double[] currentWeights;
 
     public NoisyIterativeRankingLearn(int maxIterations, double alpha, SafeGUS safeGus, 
@@ -45,12 +44,11 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
         this.noiseConfig = noiseConfig;
         this.randomUtil = new RandomUtil();
         this.preferenceHistory = new ArrayList<>();
-        this.currentWeights = null; // Sera initialisé à la première itération
+        this.currentWeights = null; 
     }
 
     @Override
     public FunctionParameters learnFromRankings(List<Ranking<IAlternative>> rankings) throws Exception {
-        // Non utilisé dans cette implémentation car on surcharge learn()
         return new FunctionParameters();
     }
 
@@ -58,7 +56,6 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
     public FunctionParameters learn() throws Exception {
         ISinglevariateFunction finalFunction = runIterativeLearning();
         
-        // Construction de l'objet de retour FunctionParameters
         FunctionParameters params = new FunctionParameters();
         if (this.currentWeights != null) {
             params.setWeights(this.currentWeights);
@@ -69,12 +66,10 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
     }
     
     private ISinglevariateFunction runIterativeLearning() {
-        // Modèle initial (sans poids, ou poids uniformes si initialisé)
         ISinglevariateFunction currentModel = new LinearScoreFunction(); 
         
         for (int t = 1; t <= maxIterations; t++) {
             
-            // Notification
             NoisyLearnStep stepStart = new NoisyLearnStep(currentModel, preferenceHistory, t);
             getSupport().firePropertyChange("step", null, stepStart);
 
@@ -96,7 +91,7 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
                 }
             }
             
-            // --- Mise à jour de l'historique et du modèle ---
+            // --- Mise à jour de l'historique et Apprentissage ---
             if (pairToQuery != null) {
                 Ranking<IAlternative> newRanking;
                 if (preferred != null) {
@@ -107,41 +102,38 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
                 }
                 preferenceHistory.add(newRanking);
                 
-                // Apprentissage : met à jour currentWeights et recrée le modèle
+                // C'est ici que la magie opère : on met à jour les poids !
                 currentModel = doLearnStep(currentModel, preferenceHistory);
             }
             
-            // Log simple (commenté pour éviter le spam, décommenter si besoin)
-            // System.out.println("Iteration " + t + " [" + (isExploration ? "EXPL" : "EXPLO") + "]");
+            System.out.println("Iteration " + t + " completed.");
         }
         
         return currentModel;
     }
     
     /**
-     * Algorithme du Perceptron pour mettre à jour les poids linéaires.
+     * Implémentation du Perceptron pour apprendre les poids.
      */
     protected ISinglevariateFunction doLearnStep(ISinglevariateFunction current, List<Ranking<IAlternative>> history) {
         if (history.isEmpty()) return current;
 
-        // 1. Initialisation des poids si nécessaire (au premier appel)
+        // 1. Initialisation des poids à la première itération
         if (this.currentWeights == null) {
-            // On récupère la dimension depuis la première règle de l'historique
             IAlternative ref = history.get(0).getObjects()[0];
             int dim = ref.getVector().length;
             this.currentWeights = new double[dim];
-            // Initialisation uniforme
             for (int i = 0; i < dim; i++) {
-                this.currentWeights[i] = 1.0 / dim;
+                this.currentWeights[i] = 1.0 / dim; // Poids uniformes au début
             }
         }
 
-        // 2. Apprentissage (Perceptron / Gradient Descent simple)
+        // 2. Algorithme d'apprentissage (Perceptron)
         double learningRate = 0.05;
-        int epochs = 20;
+        int epochs = 20; // On repasse 20 fois sur l'historique pour bien apprendre
         int dim = this.currentWeights.length;
 
-        // On recrée une fonction temporaire pour évaluer les scores avec les poids courants
+        // On crée un modèle temporaire pour tester les prédictions
         LinearScoreFunction tempModel = new LinearScoreFunction(this.currentWeights);
 
         for (int e = 0; e < epochs; e++) {
@@ -151,41 +143,40 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
                 IAlternative loser = rank.getObjects()[1];
 
                 Double[] scores = rank.getScores();
-                if (scores != null && scores[0].equals(scores[1])) continue; // Indifférence
+                if (scores != null && scores[0].equals(scores[1])) continue; // On ignore les cas d'indifférence
 
                 double scoreW = tempModel.computeScore(winner);
                 double scoreL = tempModel.computeScore(loser);
 
-                // Si erreur (le gagnant n'est pas devant)
+                // Si le modèle se trompe (donne un meilleur score au perdant)
                 if (scoreW <= scoreL) {
                     converged = false;
                     double[] vecW = winner.getVector();
                     double[] vecL = loser.getVector();
 
+                    // Mise à jour des poids : on les pousse vers le gagnant
                     for (int i = 0; i < dim; i++) {
-                        // W_new = W_old + rate * (Winner - Loser)
                         this.currentWeights[i] += learningRate * (vecW[i] - vecL[i]);
-                        // Contrainte de positivité
+                        // On garde les poids positifs (optionnel mais souvent mieux pour l'interprétation)
                         if (this.currentWeights[i] < 0) this.currentWeights[i] = 0;
                     }
-                    // Mise à jour du modèle temporaire pour la prochaine comparaison
+                    // Mise à jour du modèle temporaire avec les nouveaux poids
                     tempModel = new LinearScoreFunction(this.currentWeights);
                 }
             }
-            if (converged) break;
+            if (converged) break; // Si tout est bon, on arrête
         }
 
-        // 3. Normalisation (Somme = 1)
+        // 3. Normalisation (pour que la somme des poids fasse 1)
         double sum = 0.0;
         for (double w : this.currentWeights) sum += w;
         if (sum > 0) {
             for (int i = 0; i < dim; i++) this.currentWeights[i] /= sum;
         } else {
-             // Si tout est à 0, reset uniforme
              for (int i = 0; i < dim; i++) this.currentWeights[i] = 1.0 / dim;
         }
 
-        // 4. Retourner une nouvelle fonction avec les poids mis à jour
+        // 4. On retourne le nouveau modèle mis à jour
         return new LinearScoreFunction(this.currentWeights);
     }
 }
