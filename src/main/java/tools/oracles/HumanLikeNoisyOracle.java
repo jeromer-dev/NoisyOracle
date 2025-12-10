@@ -1,69 +1,69 @@
 package tools.oracles;
 
-import org.apache.commons.math3.distribution.NormalDistribution;
-
-import lombok.Getter;
+import tools.alternatives.IAlternative;
+import tools.functions.multivariate.PairwiseUncertainty;
 import tools.functions.singlevariate.ISinglevariateFunction;
-import tools.rules.DecisionRule;
+import tools.rules.DecisionRule; 
 import tools.utils.RandomUtil;
 
-/**
- * Abstract class representing a score-based oracle for comparing alternatives.
- */
-public abstract class HumanLikeNoisyOracle implements Oracle{
-    private @Getter RandomUtil random = new RandomUtil();
+public class HumanLikeNoisyOracle extends ChiSquaredOracle {
 
-    /**
-     * Compares two alternatives based on their computed scores.
-     *
-     * @param a The first alternative to compare.
-     * @param b The second alternative to compare.
-     * @return A negative integer, zero, or a positive integer if the score of
-     *         alternative 'a' is less than, equal to, or greater than the score of
-     *         alternative 'b', respectively.
-     */
-    public int compare(DecisionRule rule_a, DecisionRule rule_b) {
-        double scoreA = computeScore(rule_a);
-        double scoreB = computeScore(rule_b);
+    private final INoiseModel noiseModel;
+    private final PairwiseUncertainty differentiationFunction;
+    private final RandomUtil randomUtil;
 
-        int decision = -Double.compare(scoreA, scoreB);
-
-        if(scoreA == scoreB)
-            System.out.println("Oracle cannot decide !");
-
-        return decision;
-    }
-
-    public int compareNoisy(DecisionRule rule_a, DecisionRule rule_b, double noise) {
-        double u_a = getScoreFunction().computeScore(rule_a);
-        double u_b = getScoreFunction().computeScore(rule_b);
-
-        NormalDistribution normalDistribution = new NormalDistribution(u_b, noise);
-
-        double prob = normalDistribution.cumulativeProbability(u_a);
-
-        return getRandom().Bernoulli(prob) ? 1 : -1;
+    public HumanLikeNoisyOracle(int nbTransactions, INoiseModel noiseModel, PairwiseUncertainty differentiationFunction) {
+        super(nbTransactions); 
+        this.noiseModel = noiseModel;
+        this.randomUtil = new RandomUtil();
+        this.differentiationFunction = differentiationFunction;
     }
 
     /**
-     * Computes the score for a given alternative.
-     *
-     * @param a The alternative for which to compute the score.
-     * @return The computed score for the given alternative.
+     * Méthode publique pour obtenir la préférence bruitée.
      */
-    public abstract double computeScore(DecisionRule rule);
+    public IAlternative getNoisyPreferredAlternative(IAlternative R1, IAlternative R2, ISinglevariateFunction model) {
+        
+        IAlternative truePreferred = null;
 
-    /**
-     * Gets the score function used by the oracle.
-     *
-     * @return The score function.
-     */
-    public abstract ISinglevariateFunction getScoreFunction();
+        // Utilisation de la méthode compare de la classe parente
+        try {
+            // On cast en DecisionRule car c'est ce que l'oracle attend généralement
+            if (R1 instanceof DecisionRule && R2 instanceof DecisionRule) {
+                int comparisonResult = super.compare((DecisionRule)R1, (DecisionRule)R2);
+                if (comparisonResult > 0) { 
+                    truePreferred = R1;
+                } else if (comparisonResult < 0) { 
+                    truePreferred = R2;
+                }
+            }
+        } catch (Exception e) {
+            return null; 
+        }
 
-    /**
-     * Gets the TYPE of the oracle.
-     *
-     * @return The TYPE of the oracle.
-     */
-    public abstract String getTYPE();
+        if (truePreferred == null) {
+            return null; 
+        }
+
+        double scoreR1 = model.computeScore(R1);
+        double scoreR2 = model.computeScore(R2);
+        
+        double differentiation = differentiationFunction.computeScore(scoreR1, scoreR2); 
+
+        double errorProbability = noiseModel.getErrorProbability(differentiation);
+
+        // Tirage aléatoire pour l'erreur
+        boolean errorOccurs = randomUtil.nextDouble() < errorProbability;
+
+        if (errorOccurs) {
+            // Retourne l'opposé de la vraie préférence
+            if (truePreferred.equals(R1)) {
+                return R2;
+            } else {
+                return R1;
+            }
+        } else {
+            return truePreferred;
+        }
+    }
 }

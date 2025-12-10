@@ -6,11 +6,6 @@ import tools.functions.singlevariate.ISinglevariateFunction;
 import tools.ranking.Ranking; 
 import java.util.List;
 
-/**
- * Algorithme 3 (CorrectionStrategy): Identification des incohérences (Exploitation).
- * Trouve la paire dans l'historique (U) où le désaccord entre le modèle (gt) et le label 
- * de l'utilisateur (y_label) est maximal (fortement en désaccord).
- */
 public class CorrectionStrategy {
 
     private final CertaintyFunction differentiationFunction;
@@ -19,43 +14,33 @@ public class CorrectionStrategy {
         this.differentiationFunction = differentiationFunction;
     }
 
-    /**
-     * Parcourt l'historique U et retourne la paire la plus suspecte pour une revérification.
-     * @param U Historique des préférences (List<Ranking<IAlternative>>).
-     * @param model Le modèle actuel g_t.
-     * @return Une paire suspecte (Ra, Rb) à revérifier, ou null.
-     */
     public IAlternative[] findMostInconsistentPair(List<Ranking<IAlternative>> U, ISinglevariateFunction model) {
         
         double maxInconsistencyScore = -1.0;
         IAlternative[] bestCandidate = null;
 
-        // Étape 3: for chaque tuple (Ri, Rj, y_label) in U
         for (Ranking<IAlternative> ranking : U) {
             
-            // Récupère les alternatives (utilise getAlternatives(), nécessite la correction de Ranking.java)
-            List<IAlternative> alternatives = ranking.getAlternatives();
-            if (alternatives.size() != 2) continue;
+            // CORRECTION: Utilise getObjects() qui existe dans la classe Ranking originale
+            IAlternative[] objects = ranking.getObjects();
+            if (objects == null || objects.length != 2) continue;
             
-            IAlternative R1 = alternatives.get(0);
-            IAlternative R2 = alternatives.get(1);
+            IAlternative R1 = objects[0];
+            IAlternative R2 = objects[1];
             
-            // On détermine la préférence labellisée (y_label)
-            IAlternative y_label;
-            // Utilise getRank() (nécessite la correction de Ranking.java)
-            if (ranking.getRank(R1) < ranking.getRank(R2)) {
-                y_label = R1;
-            } else if (ranking.getRank(R2) < ranking.getRank(R1)) {
-                y_label = R2;
-            } else {
-                // Indifférence
-                continue; 
+            // CORRECTION: Logique de rang basée sur l'index (0 = 1er/préféré, 1 = 2ème)
+            IAlternative y_label = objects[0]; // Par définition dans un Ranking, le premier est le mieux classé
+            
+            // Si les scores sont égaux (indifférence), on ignore
+            // On vérifie si un score est disponible dans l'objet Ranking
+            Double[] scores = ranking.getScores();
+            if (scores != null && scores.length >= 2 && scores[0].equals(scores[1])) {
+                continue; // Indifférence
             }
-            
+
             double score1 = model.computeScore(R1);
             double score2 = model.computeScore(R2);
             
-            // 4-8: Déterminer la prédiction du modèle (y_pred)
             IAlternative y_pred = null;
             if (score1 > score2) {
                 y_pred = R1;
@@ -63,13 +48,10 @@ public class CorrectionStrategy {
                 y_pred = R2;
             } 
             
-            // 9: if y_pred != y_label then
+            // Si le modèle prédit une préférence stricte différente du label
             if (y_pred != null && !y_pred.equals(y_label)) {
-                // 10-11: Calcul de l'ampleur du désaccord (Certitude de différenciation)
-                // C'est le score maximal du désaccord qui sera revérifié.
                 double differentiation = differentiationFunction.computeScore(score1, score2);
                 
-                // 12-14: Mise à jour du score maximal et du candidat
                 if (differentiation > maxInconsistencyScore) {
                     maxInconsistencyScore = differentiation;
                     bestCandidate = new IAlternative[]{R1, R2};
@@ -77,7 +59,6 @@ public class CorrectionStrategy {
             }
         }
         
-        // 18-20: return Ynew
         return bestCandidate; 
     }
 }
