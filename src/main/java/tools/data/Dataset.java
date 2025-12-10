@@ -79,7 +79,7 @@ public class Dataset {
 
         String[][] transactions = getTransactions();
 
-        // Correction : Suppression de la boucle while infinie
+        // Correction boucle infinie
         for (String[] transaction : transactions) {
             if (transaction.length > 0) {
                 String classRep = transaction[0];
@@ -105,10 +105,11 @@ public class Dataset {
             while ((line = reader.readLine()) != null) {
                 if (line.trim().isEmpty()) continue;
                 
-                // CORRECTION 1 : Support des virgules ET espaces (compatible CSV et DAT)
-                String[] values = line.split("[,\\s]+");
+                // --- CORRECTION MAJEURE ---
+                // On coupe sur les virgules (,) OU les espaces (\\s)
+                // Cela permet de lire iris.dat correctement
+                String[] values = line.split("[,\\s]+"); 
                 
-                // Filtrage des éléments vides
                 List<String> validValues = new ArrayList<>();
                 for (String v : values) {
                     if (!v.isEmpty()) validValues.add(v);
@@ -137,18 +138,17 @@ public class Dataset {
         }
     }
 
-    // CORRECTION 2 : Algorithme robuste pour générer des règles valides
+    // Méthode corrigée pour générer des règles valides
     public List<DecisionRule> getRandomValidRules(int nbRules, double smoothCounts, String[] measureNames) {
         RandomUtil random = new RandomUtil();
-        int nbTransactions = this.getTransactions().length;
+        int nbTransactions = this.getTransactions().length; 
         List<DecisionRule> rules = new ArrayList<>();
         
-        if (nbTransactions == 0) return rules; // Sécurité
+        if (nbTransactions == 0) return rules;
 
         int attempts = 0;
-        int maxAttempts = nbRules * 100; // Limite pour éviter boucle infinie
+        int maxAttempts = nbRules * 200; // Augmentation du nombre d'essais
 
-        // On boucle tant qu'on n'a pas assez de règles
         while (rules.size() < nbRules && attempts < maxAttempts) {
             attempts++;
             int transactionIndex = random.nextInt(nbTransactions);
@@ -157,7 +157,6 @@ public class Dataset {
             List<String> shuffledItems = new ArrayList<>(Arrays.asList(transaction));
             Collections.shuffle(shuffledItems);
 
-            // Chercher un conséquent valide présent dans la transaction
             String selectedConsequent = null;
             for (String item : shuffledItems) {
                 if (getConsequentItemsSet().contains(item)) {
@@ -166,10 +165,9 @@ public class Dataset {
                 }
             }
 
-            // Si la transaction ne contient pas de classe cible connue, on passe
             if (selectedConsequent == null) continue;
 
-            // CORRECTION 3 : Utilisation de nbTransactions (et pas 100)
+            // Utilisation du bon nombre de transactions
             DecisionRule selectedDecisionRule = new DecisionRule(new HashSet<>(), selectedConsequent, this, nbTransactions, 1, smoothCounts, measureNames);
 
             for (String item : shuffledItems) {
@@ -180,10 +178,15 @@ public class Dataset {
                 }
             }
             
-            // CORRECTION 4 : On vérifie que la règle couvre au moins un exemple (Z > 0)
+            // On vérifie que la règle couvre au moins un exemple
             if (selectedDecisionRule.getFreqZ() > 0) {
                 rules.add(selectedDecisionRule);
             }
+        }
+        
+        // Petit message de debug si on n'a pas tout trouvé
+        if (rules.size() < nbRules) {
+            System.out.println("Attention: Seulement " + rules.size() + " règles générées sur " + nbRules);
         }
         
         return rules;
