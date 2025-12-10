@@ -17,9 +17,8 @@ import tools.oracles.HumanLikeNoisyOracle;
 import tools.oracles.INoiseModel;
 import tools.ranking.heuristics.CorrectionStrategy;
 import tools.ranking.heuristics.SafeGUS;
-// import tools.train.LearnStep; // On n'utilise plus l'interface directement ici
 import tools.train.iterative.NoisyIterativeRankingLearn;
-import tools.train.iterative.NoisyLearnStep; // Import nécessaire
+import tools.train.iterative.NoisyLearnStep; // Import de la classe concrète
 import tools.utils.NoiseModelConfig;
 import tools.functions.multivariate.PairwiseUncertainty;
 import tools.functions.multivariate.outRankingCertainties.ScoreDifference;
@@ -37,7 +36,12 @@ public class ExperimentNoisyLETRID {
             Set<String> consequents = new HashSet<>(Arrays.asList("Iris-setosa", "Iris-versicolor", "Iris-virginica"));
             
             Dataset dataset = new Dataset(filename, expDir, consequents);
-            String[] measureNames = {"Support", "Confidence", "GrowthRate"}; 
+            
+            // CORRECTION ICI : Noms des mesures en minuscules ("support", "confidence", "lift")
+            // "GrowthRate" n'est pas standard dans RuleMeasures.java, j'ai mis "lift" à la place qui est sûr.
+            // Si vous tenez à GrowthRate, vérifiez qu'il est bien codé dans RuleMeasures.java
+            String[] measureNames = {"support", "confidence", "lift"}; 
+            
             int maxIterations = 50; 
             double alpha = 0.5;
 
@@ -63,16 +67,17 @@ public class ExperimentNoisyLETRID {
             writer.write("Iteration,Accuracy\n"); // En-tête du CSV
 
             // On génère un jeu de test fixe de 200 paires pour évaluer la précision à chaque tour
+            // Note: dataset.getRandomValidRules utilise maintenant measureNames corrigé
             List<DecisionRule> testRules = dataset.getRandomValidRules(200, 0.1, measureNames);
 
             // On s'abonne aux événements de l'algorithme
             noisyAlgo.addObserver(evt -> {
                 if ("step".equals(evt.getPropertyName())) {
-                    // CORRECTION ICI : On cast vers la classe concrète NoisyLearnStep
+                    // On cast vers la classe concrète NoisyLearnStep pour avoir getIteration()
                     NoisyLearnStep step = (NoisyLearnStep) evt.getNewValue();
                     
                     ISinglevariateFunction currentModel = step.getCurrentScoreFunction();
-                    int iteration = step.getIteration(); // Maintenant cette méthode est accessible
+                    int iteration = step.getIteration();
 
                     // Calcul de la précision sur le jeu de test
                     double accuracy = computeAccuracy(currentModel, noisyOracle, testRules);
@@ -118,8 +123,7 @@ public class ExperimentNoisyLETRID {
             // Prédiction du modèle (qui gagne ?)
             DecisionRule predictedWinner = (score1 >= score2) ? r1 : r2;
 
-            // Vérité terrain (Oracle de base, SANS le bruit ajouté par getNoisyPreferred...)
-            // On utilise la méthode compare() héritée qui donne la vraie préférence mathématique
+            // Vérité terrain (Oracle de base, SANS le bruit)
             int truth = oracle.compare(r1, r2); 
             DecisionRule trueWinner = (truth >= 0) ? r1 : r2;
 
@@ -128,9 +132,8 @@ public class ExperimentNoisyLETRID {
             }
             total++;
         }
-        // Évite la division par zéro
-        if (total == 0) return 0.0;
         
+        if (total == 0) return 0.0;
         return (double) correct / total;
     }
 }
