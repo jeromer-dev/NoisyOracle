@@ -8,6 +8,8 @@ import java.util.List;
 
 /**
  * Algorithme 3 (CorrectionStrategy): Identification des incohérences (Exploitation).
+ * Trouve la paire dans l'historique (U) où le désaccord entre le modèle (gt) et le label 
+ * de l'utilisateur (y_label) est maximal (fortement en désaccord).
  */
 public class CorrectionStrategy {
 
@@ -31,7 +33,7 @@ public class CorrectionStrategy {
         // Étape 3: for chaque tuple (Ri, Rj, y_label) in U
         for (Ranking<IAlternative> ranking : U) {
             
-            // Utilisation du nouveau getAlternatives()
+            // Récupère les alternatives (utilise getAlternatives(), nécessite la correction de Ranking.java)
             List<IAlternative> alternatives = ranking.getAlternatives();
             if (alternatives.size() != 2) continue;
             
@@ -40,7 +42,7 @@ public class CorrectionStrategy {
             
             // On détermine la préférence labellisée (y_label)
             IAlternative y_label;
-            // Utilisation du nouveau getRank()
+            // Utilise getRank() (nécessite la correction de Ranking.java)
             if (ranking.getRank(R1) < ranking.getRank(R2)) {
                 y_label = R1;
             } else if (ranking.getRank(R2) < ranking.getRank(R1)) {
@@ -64,6 +66,7 @@ public class CorrectionStrategy {
             // 9: if y_pred != y_label then
             if (y_pred != null && !y_pred.equals(y_label)) {
                 // 10-11: Calcul de l'ampleur du désaccord (Certitude de différenciation)
+                // C'est le score maximal du désaccord qui sera revérifié.
                 double differentiation = differentiationFunction.computeScore(score1, score2);
                 
                 // 12-14: Mise à jour du score maximal et du candidat
