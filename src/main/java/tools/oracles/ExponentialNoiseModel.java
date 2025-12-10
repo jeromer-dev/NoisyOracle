@@ -1,69 +1,20 @@
 package tools.oracles;
 
-import org.apache.commons.math3.distribution.NormalDistribution;
-
-import lombok.Getter;
-import tools.functions.singlevariate.ISinglevariateFunction;
-import tools.rules.DecisionRule;
-import tools.utils.RandomUtil;
-
 /**
- * Abstract class representing a score-based oracle for comparing alternatives.
+ * Modèle de bruit Exponentiel.
+ * La probabilité d'erreur diminue exponentiellement avec la différenciation.
  */
-public abstract class ExponentialNoiseModel implements Oracle{
-    private @Getter RandomUtil random = new RandomUtil();
+public class ExponentialNoiseModel implements INoiseModel {
 
-    /**
-     * Compares two alternatives based on their computed scores.
-     *
-     * @param a The first alternative to compare.
-     * @param b The second alternative to compare.
-     * @return A negative integer, zero, or a positive integer if the score of
-     *         alternative 'a' is less than, equal to, or greater than the score of
-     *         alternative 'b', respectively.
-     */
-    public int compare(DecisionRule rule_a, DecisionRule rule_b) {
-        double scoreA = computeScore(rule_a);
-        double scoreB = computeScore(rule_b);
+    private final double beta; // Paramètre de sensibilité
 
-        int decision = -Double.compare(scoreA, scoreB);
-
-        if(scoreA == scoreB)
-            System.out.println("Oracle cannot decide !");
-
-        return decision;
+    public ExponentialNoiseModel(double beta) {
+        this.beta = beta;
     }
 
-    public int compareNoisy(DecisionRule rule_a, DecisionRule rule_b, double noise) {
-        double u_a = getScoreFunction().computeScore(rule_a);
-        double u_b = getScoreFunction().computeScore(rule_b);
-
-        NormalDistribution normalDistribution = new NormalDistribution(u_b, noise);
-
-        double prob = normalDistribution.cumulativeProbability(u_a);
-
-        return getRandom().Bernoulli(prob) ? 1 : -1;
+    @Override
+    public double getErrorProbability(double differentiation) {
+        // Formule: sigma = 0.5 * exp(-beta * Theta)
+        return 0.5 * Math.exp(-beta * differentiation);
     }
-
-    /**
-     * Computes the score for a given alternative.
-     *
-     * @param a The alternative for which to compute the score.
-     * @return The computed score for the given alternative.
-     */
-    public abstract double computeScore(DecisionRule rule);
-
-    /**
-     * Gets the score function used by the oracle.
-     *
-     * @return The score function.
-     */
-    public abstract ISinglevariateFunction getScoreFunction();
-
-    /**
-     * Gets the TYPE of the oracle.
-     *
-     * @return The TYPE of the oracle.
-     */
-    public abstract String getTYPE();
 }
