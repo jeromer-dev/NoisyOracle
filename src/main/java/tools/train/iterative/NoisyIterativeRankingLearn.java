@@ -22,15 +22,13 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
     private final SafeGUS safeGus;
     private final CorrectionStrategy correctionStrategy;
     private final HumanLikeNoisyOracle noisyOracle;
-    private final NoiseModelConfig noiseConfig;
     private final double alpha;
     private final RandomUtil randomUtil;
-    
     private final int maxIterations;
     
     private List<Ranking<IAlternative>> preferenceHistory;
     
-    // Stockage local des poids et des valeurs maximales pour la normalisation
+    // Poids et Maxima pour la normalisation
     private double[] currentWeights;
     private double[] maxValues; 
 
@@ -43,7 +41,6 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
         this.safeGus = safeGus;
         this.correctionStrategy = correctionStrategy;
         this.noisyOracle = noisyOracle;
-        this.noiseConfig = noiseConfig;
         this.randomUtil = new RandomUtil();
         this.preferenceHistory = new ArrayList<>();
         this.currentWeights = null; 
@@ -52,7 +49,7 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
 
     @Override
     public FunctionParameters learnFromRankings(List<Ranking<IAlternative>> rankings) throws Exception {
-        return new FunctionParameters(); // Non utilisé
+        return new FunctionParameters(); 
     }
 
     @Override
@@ -69,12 +66,10 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
     }
     
     private ISinglevariateFunction runIterativeLearning() {
-        // Au départ, modèle linéaire simple (sera remplacé dès le 1er apprentissage)
         ISinglevariateFunction currentModel = new LinearScoreFunction(); 
         
         for (int t = 1; t <= maxIterations; t++) {
             
-            // Notification pour le monitoring (ExperimentNoisyLETRID)
             NoisyLearnStep stepStart = new NoisyLearnStep(currentModel, preferenceHistory, t);
             getSupport().firePropertyChange("step", null, stepStart);
 
@@ -83,24 +78,21 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
             IAlternative preferred = null;
             boolean isExploration = (gamma < alpha);
 
-            // --- 1. Phase de Sélection ---
+            // --- Phase de Sélection ---
             if (isExploration) {
-                // Exploration : Safe-GUS cherche à réduire l'incertitude dans des zones sûres
                 pairToQuery = safeGus.selectSafePair(currentModel, t);
                 if (pairToQuery != null) {
                     preferred = noisyOracle.getNoisyPreferredAlternative(pairToQuery[0], pairToQuery[1], currentModel);
                 }
             } else {
-                // Exploitation : CorrectionStrategy cherche les erreurs passées
                 pairToQuery = correctionStrategy.findMostInconsistentPair(preferenceHistory, currentModel);
                 if (pairToQuery != null) {
                     preferred = noisyOracle.getNoisyPreferredAlternative(pairToQuery[0], pairToQuery[1], currentModel);
                 }
             }
             
-            // --- 2. Mise à jour de l'historique et Apprentissage ---
+            // --- Mise à jour ---
             if (pairToQuery != null) {
-                // Mise à jour des bornes de normalisation avec les nouvelles données
                 updateMaxValues(pairToQuery[0]);
                 updateMaxValues(pairToQuery[1]);
 
@@ -113,26 +105,18 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
                 }
                 preferenceHistory.add(newRanking);
                 
-                // Apprentissage : Mise à jour des poids via Perceptron normalisé
                 currentModel = doLearnStep(currentModel, preferenceHistory);
             }
-            
-            // Debug minimal
-            // System.out.println("Iteration " + t + " completed.");
+            System.out.println("Iteration " + t + " completed.");
         }
-        
         return currentModel;
     }
     
-    /**
-     * Met à jour les valeurs maximales observées pour chaque critère.
-     * Indispensable pour que le Support (0-150) n'écrase pas la Confiance (0-1).
-     */
     private void updateMaxValues(IAlternative alt) {
         double[] vec = alt.getVector();
         if (this.maxValues == null) {
             this.maxValues = new double[vec.length];
-            Arrays.fill(this.maxValues, 1.0); // Évite division par 0 au départ
+            Arrays.fill(this.maxValues, 1.0); 
         }
         for (int i = 0; i < vec.length; i++) {
             if (Math.abs(vec[i]) > this.maxValues[i]) {
@@ -142,14 +126,15 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
     }
 
     /**
-     * Algorithme du Perceptron avec Normalisation des données et Learning Rate faible.
+     * Apprentissage par Régression Logistique (Soft Updates).
+     * Beaucoup plus stable que le Perceptron face au bruit.
      */
     protected ISinglevariateFunction doLearnStep(ISinglevariateFunction current, List<Ranking<IAlternative>> history) {
         if (history.isEmpty()) return current;
 
         int dim = history.get(0).getObjects()[0].getVector().length;
 
-        // 1. Initialisation ALÉATOIRE (Casse la symétrie et prouve l'apprentissage)
+        // 1. Initialisation
         if (this.currentWeights == null) {
             this.currentWeights = new double[dim];
             double sum = 0;
@@ -157,72 +142,68 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
                 this.currentWeights[i] = randomUtil.nextDouble();
                 sum += this.currentWeights[i];
             }
-            // Normalisation initiale (somme = 1)
             for(int i=0; i<dim; i++) this.currentWeights[i] /= sum;
         }
 
-        // 2. Paramètres d'apprentissage (MODIFIÉS pour stabilité)
-        double learningRate = 0.001; // TRES FAIBLE pour éviter les oscillations (était 0.05)
-        int epochs = 100;            // BEAUCOUP DE PASSES pour compenser le taux faible
+        // 2. Paramètres (Taux faible + Beaucoup d'epochs = Stabilité)
+        double learningRate = 0.01; 
+        int epochs = 100;
         
-        // On utilise le modèle normalisé pour faire les prédictions internes
         NormalizedLinearFunction tempModel = new NormalizedLinearFunction(currentWeights, maxValues);
 
         for (int e = 0; e < epochs; e++) {
-            boolean converged = true;
             for (Ranking<IAlternative> rank : history) {
                 IAlternative winner = rank.getObjects()[0];
                 IAlternative loser = rank.getObjects()[1];
-
+                
+                // Si égalité (indifférence), on saute pour l'instant
                 Double[] scores = rank.getScores();
-                if (scores != null && scores[0].equals(scores[1])) continue; // Ignore indifférence
+                if (scores != null && scores[0].equals(scores[1])) continue;
 
-                // Prédiction sur données normalisées
-                double scoreW = tempModel.computeScore(winner);
-                double scoreL = tempModel.computeScore(loser);
+                // Prédiction (Normalisée)
+                double sW = tempModel.computeScore(winner);
+                double sL = tempModel.computeScore(loser);
+                
+                // --- MISE A JOUR TYPE RANKNET / LOGISTIQUE ---
+                // On calcule la probabilité que W gagne selon le modèle actuel : P = 1 / (1 + exp(-(sW - sL)))
+                // L'objectif est que P soit proche de 1.0
+                double diff = sW - sL;
+                double prob = 1.0 / (1.0 + Math.exp(-diff));
+                
+                // Gradient : (Cible - Probabilité) = (1.0 - prob)
+                double gradient = 1.0 - prob;
 
-                // Si erreur (le modèle actuel préfère le perdant), on corrige
-                if (scoreW <= scoreL) {
-                    converged = false;
-                    double[] vecW = winner.getVector();
-                    double[] vecL = loser.getVector();
+                double[] vecW = winner.getVector();
+                double[] vecL = loser.getVector();
 
-                    for (int i = 0; i < dim; i++) {
-                        // Gradient normalisé par le max de chaque critère
-                        // Cela permet à la Confiance d'avoir autant d'impact que le Support
-                        double normW = vecW[i] / maxValues[i];
-                        double normL = vecL[i] / maxValues[i];
-                        
-                        this.currentWeights[i] += learningRate * (normW - normL);
-                        
-                        // Contrainte : Poids positifs uniquement
-                        if (this.currentWeights[i] < 0) this.currentWeights[i] = 0;
-                    }
-                    // Mise à jour du modèle temporaire pour la suite de la boucle
-                    tempModel = new NormalizedLinearFunction(currentWeights, maxValues);
+                for (int i = 0; i < dim; i++) {
+                    double normW = vecW[i] / maxValues[i];
+                    double normL = vecL[i] / maxValues[i];
+                    
+                    // Update proportionnel à l'erreur de probabilité
+                    this.currentWeights[i] += learningRate * gradient * (normW - normL);
+                    
+                    // Contrainte de positivité
+                    if (this.currentWeights[i] < 0) this.currentWeights[i] = 0;
                 }
+                
+                // Mise à jour du modèle temporaire
+                tempModel = new NormalizedLinearFunction(currentWeights, maxValues);
             }
-            if (converged) break;
         }
 
-        // 3. Normalisation finale des poids (somme = 1)
+        // 3. Normalisation finale
         double sum = 0.0;
         for (double w : this.currentWeights) sum += w;
         if (sum > 0) {
             for (int i = 0; i < dim; i++) this.currentWeights[i] /= sum;
         } else {
-             // Fallback si tous les poids tombent à 0 (rare)
              for (int i = 0; i < dim; i++) this.currentWeights[i] = 1.0 / dim;
         }
 
-        // Retourne le modèle spécial qui sait gérer la normalisation
         return new NormalizedLinearFunction(this.currentWeights, this.maxValues);
     }
 
-    /**
-     * Classe interne : Modèle linéaire qui divise les entrées par maxValues avant de pondérer.
-     * Score = Somme( w_i * (x_i / max_i) )
-     */
     private static class NormalizedLinearFunction extends LinearScoreFunction {
         private final double[] maxValues;
         private final double[] weights;
@@ -239,16 +220,13 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
             double[] vec = alt.getVector();
             for (int i = 0; i < vec.length; i++) {
                 double val = vec[i];
-                // Protection contre division par zéro ou null
                 double max = (maxValues != null && i < maxValues.length) ? maxValues[i] : 1.0;
                 double normVal = (max != 0) ? val / max : 0;
-                
                 score += weights[i] * normVal;
             }
             return score;
         }
         
-        // Compatibilité avec DecisionRule via le polymorphisme
         public double computeScore(DecisionRule rule) {
              return computeScore((IAlternative) rule);
         }
