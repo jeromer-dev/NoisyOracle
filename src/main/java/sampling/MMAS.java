@@ -59,4 +59,16 @@ public class MMAS {
     public void setNormalizationTechnique(NormalizationMethod norm) {
         getSingleVariateSampler().setNormalizationTechnique(norm);
     }
+    
+    // NOUVELLE METHODE AJOUTÉE POUR SAFEGUS (Résolution Erreur #3)
+    /**
+     * Retourne le buffer des règles (le "tas" H) accumulé dans MultivariateToSinglevariate.
+     * Pour être compatible avec l'utilisation SafeGUS, nous retournons le top 10 des règles échantillonnées.
+     */
+    public List<DecisionRule> getRuleBuffer() {
+        // La méthode getTopK(int) de MultivariateToSinglevariate retourne le buffer interne.
+        // SafeGUS utilise un buffer de taille 10.
+        return getScoringFunction().getTopK(10); 
+    }
+    // FIN DE LA NOUVELLE METHODE
 }
