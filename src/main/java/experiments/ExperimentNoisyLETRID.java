@@ -3,6 +3,7 @@ package experiments;
 import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -30,20 +31,22 @@ public class ExperimentNoisyLETRID {
         try {
             System.out.println("=== Lancement de l'expérience Noisy-LETRID ===");
 
-            // 1. Chargement et Configuration
+            // --- 1. Chargement et Configuration ---
             String expDir = "src/test/resources/";
             String filename = "iris.dat";
-            // On inclut tous les formats possibles de classes pour être sûr
-            Set<String> consequents = new HashSet<>(Arrays.asList("12", "13", "14", "Iris-setosa", "Iris-versicolor", "Iris-virginica"));
+            // Codes des classes pour Iris (tels que lus dans le fichier dat)
+            Set<String> consequents = new HashSet<>(Arrays.asList("12", "13", "14"));
             
             Dataset dataset = new Dataset(filename, expDir, consequents);
             System.out.println("Dataset chargé. Transactions : " + dataset.getNbTransactions());
 
+            // Mesures : attention à la casse (minuscules)
             String[] measureNames = {"support", "confidence", "lift"}; 
+            
             int maxIterations = 50; 
             double alpha = 0.5;
 
-            // 2. Préparation des composants
+            // --- 2. Préparation des composants ---
             INoiseModel noiseModel = new ExponentialNoiseModel(5.0);
             PairwiseUncertainty diffFunction = new PairwiseUncertainty("ScoreDiff", new ScoreDifference(new LinearScoreFunction()));
             
@@ -57,14 +60,30 @@ public class ExperimentNoisyLETRID {
                 maxIterations, alpha, safeGus, correctionStrategy, noisyOracle, config
             );
 
-            // 3. Monitoring
+            // --- 3. Génération du Jeu de Test (Nettoyé) ---
+            List<DecisionRule> rawRules = dataset.getRandomValidRules(300, 0.1, measureNames);
+            List<DecisionRule> testRules = new ArrayList<>();
+            
+            // On filtre pour éviter les doublons parfaits qui causent "Oracle cannot decide"
+            for (DecisionRule r : rawRules) {
+                boolean isDuplicate = false;
+                for (DecisionRule existing : testRules) {
+                    if (existing.equals(r)) {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+                if (!isDuplicate) {
+                    testRules.add(r);
+                }
+                if (testRules.size() >= 200) break;
+            }
+            System.out.println("Règles de test uniques générées : " + testRules.size());
+
+            // --- 4. Système de Monitoring ---
             String outputCsv = "results_noisy_letrid.csv";
             BufferedWriter writer = new BufferedWriter(new FileWriter(outputCsv));
             writer.write("Iteration,Accuracy\n"); 
-
-            // Génération du jeu de test
-            List<DecisionRule> testRules = dataset.getRandomValidRules(200, 0.1, measureNames);
-            System.out.println("Règles de test générées : " + testRules.size());
 
             // Observateur
             noisyAlgo.addObserver(evt -> {
@@ -84,7 +103,7 @@ public class ExperimentNoisyLETRID {
                 }
             });
 
-            // 4. Lancement
+            // --- 5. Lancement ---
             System.out.println("Début de l'apprentissage...");
             noisyAlgo.learn();
             
@@ -104,24 +123,27 @@ public class ExperimentNoisyLETRID {
             DecisionRule r1 = rules.get(i);
             DecisionRule r2 = rules.get(i+1);
 
-            try {
-                // Vérité terrain
-                int truth = oracle.compare(r1, r2); 
-                if (truth == 0) continue; // Ignore les égalités
-                
-                double score1 = model.computeScore(r1);
-                double score2 = model.computeScore(r2);
-                DecisionRule predictedWinner = (score1 >= score2) ? r1 : r2;
-                DecisionRule trueWinner = (truth > 0) ? r1 : r2;
-    
-                if (predictedWinner.equals(trueWinner)) correct++;
-                total++;
-                
-            } catch (Exception e) {
-                // CORRECTION : On attrape l'erreur "Illegal value for measure phi" et on passe à la paire suivante
-                continue;
+            double score1 = model.computeScore(r1);
+            double score2 = model.computeScore(r2);
+            DecisionRule predictedWinner = (score1 >= score2) ? r1 : r2;
+
+            // Vérité terrain (Oracle de base sans bruit)
+            int truth = oracle.compare(r1, r2); 
+            
+            // Si l'oracle est indifférent (scores égaux), on ne compte pas
+            if (truth == 0) continue; 
+            
+            // CORRECTION CRITIQUE ICI :
+            // ArtificialOracle retourne -1 si r1 est meilleur, 1 si r2 est meilleur
+            DecisionRule trueWinner = (truth < 0) ? r1 : r2;
+
+            if (predictedWinner.equals(trueWinner)) {
+                correct++;
             }
+            total++;
         }
-        return (total == 0) ? 0.0 : (double) correct / total;
+        
+        if (total == 0) return 0.0;
+        return (double) correct / total;
     }
 }
