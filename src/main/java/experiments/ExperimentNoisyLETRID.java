@@ -30,32 +30,26 @@ public class ExperimentNoisyLETRID {
         try {
             System.out.println("=== Lancement de l'expérience Noisy-LETRID ===");
 
-            // --- 1. Chargement et Configuration ---
+            // 1. Chargement
             String expDir = "src/test/resources/";
             String filename = "iris.dat";
-            Set<String> consequents = new HashSet<>(Arrays.asList("Iris-setosa", "Iris-versicolor", "Iris-virginica"));
+            
+            // CORRECTION IMPORTANTE : Le fichier iris.dat contient des classes encodées en nombres (12, 13, 14)
+            // et non "Iris-setosa". On adapte donc les conséquents.
+            Set<String> consequents = new HashSet<>(Arrays.asList("12", "13", "14"));
             
             Dataset dataset = new Dataset(filename, expDir, consequents);
-            
-            // DIAGNOSTIC 1 : Vérifier le dataset
-            System.out.println("Dataset chargé : " + filename);
-            System.out.println(" - Transactions : " + dataset.getNbTransactions());
-            System.out.println(" - Items (Antecedents) : " + dataset.getNbAntecedentItems());
-            if (dataset.getNbTransactions() == 0) {
-                System.err.println("ERREUR CRITIQUE : Le dataset est vide ! Vérifiez le chemin du fichier.");
-                return;
-            }
+            System.out.println("Dataset chargé. Transactions : " + dataset.getNbTransactions());
 
-            // Mesures utilisées (minuscules obligatoires)
+            // CORRECTION : Mesures en minuscules obligatoires
             String[] measureNames = {"support", "confidence", "lift"}; 
             
             int maxIterations = 50; 
             double alpha = 0.5;
 
-            // --- 2. Préparation des composants ---
+            // 2. Préparation
             INoiseModel noiseModel = new ExponentialNoiseModel(5.0);
             PairwiseUncertainty diffFunction = new PairwiseUncertainty("ScoreDiff", new ScoreDifference(new LinearScoreFunction()));
-            
             HumanLikeNoisyOracle noisyOracle = new HumanLikeNoisyOracle(dataset.getNbTransactions(), noiseModel, diffFunction);
 
             NoiseModelConfig config = new NoiseModelConfig(maxIterations, 0.8, 5.0);
@@ -66,44 +60,36 @@ public class ExperimentNoisyLETRID {
                 maxIterations, alpha, safeGus, correctionStrategy, noisyOracle, config
             );
 
-            // --- 3. Système de Monitoring ---
+            // 3. Monitoring
             String outputCsv = "results_noisy_letrid.csv";
             BufferedWriter writer = new BufferedWriter(new FileWriter(outputCsv));
             writer.write("Iteration,Accuracy\n"); 
 
-            // Génération du jeu de test
+            // Génération du jeu de test (200 règles valides)
             List<DecisionRule> testRules = dataset.getRandomValidRules(200, 0.1, measureNames);
-            
-            // DIAGNOSTIC 2 : Vérifier les règles générées
-            DecisionRule exemple = testRules.get(0);
-            System.out.println("Exemple de règle générée : " + exemple);
-            System.out.println(" - Fréquences : X=" + exemple.getFreqX() + ", Y=" + exemple.getFreqY() + ", Z=" + exemple.getFreqZ());
-            if (exemple.getFreqZ() == 0) {
-                System.err.println("ATTENTION : La règle exemple a une fréquence nulle. Les règles ne couvrent aucune transaction !");
+            if (testRules.isEmpty()) {
+                System.err.println("ERREUR : Aucune règle de test n'a pu être générée. Vérifiez le dataset.");
+                writer.close();
+                return;
             }
 
-            // Observateur
             noisyAlgo.addObserver(evt -> {
                 if ("step".equals(evt.getPropertyName())) {
                     NoisyLearnStep step = (NoisyLearnStep) evt.getNewValue();
                     ISinglevariateFunction currentModel = step.getCurrentScoreFunction();
                     int iteration = step.getIteration();
 
-                    // Calcul de la précision
                     double accuracy = computeAccuracy(currentModel, noisyOracle, testRules);
-                    
                     System.out.println(">>> Iteration " + iteration + " | Précision: " + String.format("%.2f", accuracy * 100) + "%");
                     
                     try {
                         writer.write(iteration + "," + accuracy + "\n");
                         writer.flush();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
+                    } catch (IOException e) { e.printStackTrace(); }
                 }
             });
 
-            // --- 4. Lancement ---
+            // 4. Lancement
             System.out.println("Début de l'apprentissage...");
             noisyAlgo.learn();
             
@@ -118,7 +104,6 @@ public class ExperimentNoisyLETRID {
     private static double computeAccuracy(ISinglevariateFunction model, HumanLikeNoisyOracle oracle, List<DecisionRule> rules) {
         int correct = 0;
         int total = 0;
-
         for (int i = 0; i < rules.size() - 1; i += 2) {
             DecisionRule r1 = rules.get(i);
             DecisionRule r2 = rules.get(i+1);
@@ -127,25 +112,14 @@ public class ExperimentNoisyLETRID {
             double score2 = model.computeScore(r2);
             DecisionRule predictedWinner = (score1 >= score2) ? r1 : r2;
 
-            // Vérité terrain
             int truth = oracle.compare(r1, r2); 
-            
-            // DIAGNOSTIC 3 : Ignorer les cas où l'oracle ne sait pas décider (scores égaux)
-            if (truth == 0) {
-                // L'oracle est indifférent, on ne compte pas cela comme une erreur ou une réussite
-                // C'est souvent le cas si les règles sont identiques ou nulles
-                continue; 
-            }
+            if (truth == 0) continue; // Ignore les égalités
             
             DecisionRule trueWinner = (truth > 0) ? r1 : r2;
 
-            if (predictedWinner.equals(trueWinner)) {
-                correct++;
-            }
+            if (predictedWinner.equals(trueWinner)) correct++;
             total++;
         }
-        
-        if (total == 0) return 0.0;
-        return (double) correct / total;
+        return (total == 0) ? 0.0 : (double) correct / total;
     }
 }

@@ -6,14 +6,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.IntConsumer;
-
 import com.zaxxer.sparsebits.SparseBitSet;
-
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
-import tools.alternatives.IAlternative;
+import tools.alternatives.IAlternative; // Import nécessaire
 import tools.data.Dataset;
 import tools.utils.AlternativeUtil;
 import tools.utils.SetUtil;
@@ -21,36 +19,23 @@ import tools.utils.SetUtil;
 @Getter
 @Builder(toBuilder = true)
 @AllArgsConstructor
-public class DecisionRule implements IRule, IAlternative { // CORRECTION: Ajout de "implements IAlternative"
-    // Transactional dataset
+// AJOUT DE "implements IAlternative"
+public class DecisionRule implements IRule, IAlternative { 
+    
     private Dataset dataset;
     private Map<String, SparseBitSet> itemsMap;
-
-    // Frequency variables
     private @Setter int freqX, freqY, freqZ;
     private @Setter @Getter double smoothCounts;
-
-    // Variables regarding feature vectors
     private @Setter @Getter String[] measureNames;
     private @Getter IAlternative alternative;
-
-    // Covers
     private SparseBitSet coverX;
     private SparseBitSet coverY;
     private SparseBitSet coverZ;
-
-    // Memoization
     private Map<Set<String>, SparseBitSet> memoizedCoverX;
     private Map<Set<String>, SparseBitSet> memoizedCoverZ;
     private @Getter @Setter int maxSizeX, maxSizeZ;
-
-    // Parallel computation
     private CoverParallelCompute coverComputer;
-
-    // Consequent
     private String Y;
-
-    // Item Sets
     private Set<String> itemsInX;
     private Set<String> itemsInZ;
 
@@ -59,24 +44,43 @@ public class DecisionRule implements IRule, IAlternative { // CORRECTION: Ajout 
         this.dataset = dataset;
         this.itemsMap = this.dataset.getItemsMap();
         this.smoothCounts = smoothCounts;
-
         this.itemsInX = itemsInX;
         this.Y = Y;
         computeItemsInZ();
-
         setMaxSizeX(maxSizeX);
         setMaxSizeZ(maxSizeZ);
         initializeMemoization(getMaxSizeX(), getMaxSizeZ());
-
         this.coverComputer = new CoverParallelCompute(getDataset());
-
         computeNewCover(new String[] { "x", "y", "z" });
         updateFrequencies(new String[] { "x", "y", "z" });
-
         setMeasureNames(measureNames);
         this.alternative = AlternativeUtil.computeAlternativeOrZero(this, getDataset().getNbTransactions(),
                 smoothCounts, getMeasureNames());
     }
+    
+    // --- METHODES DE L'INTERFACE IAlternative ---
+    
+    @Override
+    public double[] getVector() {
+        return alternative.getVector();
+    }
+
+    @Override
+    public double getOrderedValue(int i) {
+        return alternative.getOrderedValue(i);
+    }
+
+    @Override
+    public int[] getOrderedPermutation() {
+        return alternative.getOrderedPermutation();
+    }
+
+    @Override
+    public IAlternative deepCopy() {
+        return alternative.deepCopy();
+    }
+
+    // --- LE RESTE DU CODE EXISTANT (Identique) ---
 
     public void expandSimpleCopy(DecisionRule originalRule) {
         this.dataset = originalRule.getDataset();
@@ -95,71 +99,46 @@ public class DecisionRule implements IRule, IAlternative { // CORRECTION: Ajout 
 
     private void initializeMemoization(int maxSizeX, int maxSizeZ) {
         this.memoizedCoverX = new LinkedHashMap<Set<String>, SparseBitSet>(maxSizeX, 1.0f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<Set<String>, SparseBitSet> eldest) {
-                return size() > maxSizeX;
-            }
+            @Override protected boolean removeEldestEntry(Map.Entry<Set<String>, SparseBitSet> eldest) { return size() > maxSizeX; }
         };
         this.memoizedCoverZ = new LinkedHashMap<Set<String>, SparseBitSet>(maxSizeZ, 1.0f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<Set<String>, SparseBitSet> eldest) {
-                return size() > maxSizeZ;
-            }
+            @Override protected boolean removeEldestEntry(Map.Entry<Set<String>, SparseBitSet> eldest) { return size() > maxSizeZ; }
         };
     }
 
     private void computeItemsInZ() {
         this.itemsInZ = new HashSet<>(this.itemsInX);
-        if (!this.Y.isEmpty()) {
-            this.itemsInZ.add(this.Y);
-        }
+        if (!this.Y.isEmpty()) this.itemsInZ.add(this.Y);
     }
 
     private void updateFrequencies(String[] directions) {
         for (String direction : directions) {
             switch (direction) {
-                case "x":
-                    updateFrequency(this.itemsInX, this.coverX, this::setFreqX);
-                    break;
-                case "y":
-                    updateFrequency(this.Y, this.coverY, this::setFreqY);
-                    break;
-                case "z":
-                    updateFrequency(this.itemsInZ, this.coverZ, this::setFreqZ);
-                    break;
+                case "x": updateFrequency(this.itemsInX, this.coverX, this::setFreqX); break;
+                case "y": updateFrequency(this.Y, this.coverY, this::setFreqY); break;
+                case "z": updateFrequency(this.itemsInZ, this.coverZ, this::setFreqZ); break;
             }
         }
     }
 
     private void updateFrequency(Set<?> items, SparseBitSet cover, IntConsumer frequencySetter) {
-        int cardinality = cover.cardinality();
-        frequencySetter.accept(items.isEmpty() ? 0 : cardinality);
+        frequencySetter.accept(items.isEmpty() ? 0 : cover.cardinality());
     }
-
     private void updateFrequency(String item, SparseBitSet cover, IntConsumer frequencySetter) {
         frequencySetter.accept(item.isEmpty() ? 0 : cover.cardinality());
     }
 
     private void updateAlternative() {
-        IAlternative modified = AlternativeUtil.computeAlternativeOrZero(this, getDataset().getNbTransactions(),
+        this.alternative = AlternativeUtil.computeAlternativeOrZero(this, getDataset().getNbTransactions(),
                 smoothCounts, getMeasureNames());
-        this.alternative = modified;
     }
 
     private void computeNewCover(String[] directions) {
         for (String direction : directions) {
             switch (direction) {
-                case "x":
-                    updateCoverX();
-                    break;
-                case "y":
-                    updateCoverY();
-                    break;
-                case "z":
-                    updateCoverZ();
-                    break;
-                default:
-                    throw new IllegalArgumentException("Unexpected direction: " + direction);
+                case "x": updateCoverX(); break;
+                case "y": updateCoverY(); break;
+                case "z": updateCoverZ(); break;
             }
         }
     }
@@ -216,7 +195,6 @@ public class DecisionRule implements IRule, IAlternative { // CORRECTION: Ajout 
             this.coverX.and(this.itemsMap.get(itemValue));
             memoizedCoverX.put(SetUtil.copySet(this.itemsInX), SetUtil.copyCover(this.coverX));
         }
-
         computeItemsInZ();
         SparseBitSet fromMemoryZ = memoizedCoverZ.get(this.itemsInZ);
         if (fromMemoryZ != null) {
@@ -225,7 +203,6 @@ public class DecisionRule implements IRule, IAlternative { // CORRECTION: Ajout 
             this.coverZ.and(this.itemsMap.get(itemValue));
             memoizedCoverZ.put(SetUtil.copySet(this.itemsInZ), SetUtil.copyCover(this.coverZ));
         }
-
         updateFrequencies(new String[] { "x", "z" });
         updateAlternative();
     }
@@ -266,29 +243,5 @@ public class DecisionRule implements IRule, IAlternative { // CORRECTION: Ajout 
     @Override
     public int hashCode() {
         return Objects.hash(itemsInX, Y, freqX, freqY, freqZ);
-    }
-
-    // --- IMPLEMENTATION DE IAlternative (CORRECTIF POUR CLASSCASTEXCEPTION) ---
-    // Ces méthodes délèguent simplement à l'objet 'alternative' interne qui contient le vecteur.
-
-    @Override
-    public double[] getVector() {
-        return alternative.getVector();
-    }
-
-    @Override
-    public double getOrderedValue(int i) {
-        return alternative.getOrderedValue(i);
-    }
-
-    @Override
-    public int[] getOrderedPermutation() {
-        return alternative.getOrderedPermutation();
-    }
-
-    @Override
-    public IAlternative deepCopy() {
-        // Pour les besoins de clonage simple du vecteur
-        return alternative.deepCopy();
     }
 }
