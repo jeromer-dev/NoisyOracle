@@ -79,6 +79,7 @@ public class Dataset {
 
         String[][] transactions = getTransactions();
 
+        // Correction de la boucle infinie (suppression du while)
         for (String[] transaction : transactions) {
             if (transaction.length > 0) {
                 String classRep = transaction[0];
@@ -128,10 +129,10 @@ public class Dataset {
         }
     }
 
-    // CORRECTION : Utilisation de nbTransactions réelles au lieu de 100
     public List<DecisionRule> getRandomValidRules(int nbRules, double smoothCounts, String[] measureNames) {
         RandomUtil random = new RandomUtil();
-        int nbTransactions = this.getTransactions().length; // Taille réelle du dataset (ex: 150)
+        // C'est ici que l'erreur se produisait : on récupère la vraie taille N
+        int nbTransactions = this.getTransactions().length; 
         List<DecisionRule> rules = new ArrayList<>();
 
         for (int i = 0; i < nbRules; i++) {
@@ -141,8 +142,7 @@ public class Dataset {
             List<String> shuffledItems = new ArrayList<>(Arrays.asList(transaction));
             Collections.shuffle(shuffledItems);
 
-            // CORRECTION: Passer nbTransactions (la vraie taille N)
-            // Passer 1 pour le support du conséquent (temporaire, sera mis à jour par setY)
+            // CORRECTION CRITIQUE : Remplacer 100 par nbTransactions
             DecisionRule selectedDecisionRule = new DecisionRule(new HashSet<>(), "", this, nbTransactions, 1, smoothCounts,
                     measureNames);
 
