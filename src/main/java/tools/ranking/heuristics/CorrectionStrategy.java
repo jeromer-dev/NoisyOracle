@@ -31,7 +31,7 @@ public class CorrectionStrategy {
         // Étape 3: for chaque tuple (Ri, Rj, y_label) in U
         for (Ranking<IAlternative> ranking : U) {
             
-            // On suppose que chaque Ranking dans U contient exactement deux alternatives comparées.
+            // Utilisation du nouveau getAlternatives()
             List<IAlternative> alternatives = ranking.getAlternatives();
             if (alternatives.size() != 2) continue;
             
@@ -40,6 +40,7 @@ public class CorrectionStrategy {
             
             // On détermine la préférence labellisée (y_label)
             IAlternative y_label;
+            // Utilisation du nouveau getRank()
             if (ranking.getRank(R1) < ranking.getRank(R2)) {
                 y_label = R1;
             } else if (ranking.getRank(R2) < ranking.getRank(R1)) {
