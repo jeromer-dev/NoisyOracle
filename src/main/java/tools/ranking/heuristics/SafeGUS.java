@@ -11,6 +11,7 @@ import tools.utils.RankingUtil;
 import java.util.List;
 import java.util.stream.Collectors;
 import sampling.MMAS; 
+import tools.rules.DecisionRule; 
 
 public class SafeGUS extends UncertaintySampling {
 
@@ -28,15 +29,18 @@ public class SafeGUS extends UncertaintySampling {
     public IAlternative[] selectSafePair(ISinglevariateFunction model, int t) {
         double adaptiveThreshold = noiseConfig.getAdaptiveThreshold(t);
 
-        // Récupération du Sampler MMAS via le getter (Corrigé Erreur #2)
+        // Récupération du Sampler MMAS via le getter
         MMAS sampler = (MMAS) this.getSampler(); 
         
         // 1. Exécution de la logique SIMAS pour mettre à jour le buffer
         sampler.setScoringFunction(model);
         sampler.sample(); 
         
-        // 2. Récupération de l'ensemble S via le getter (Corrigé Erreur #3)
-        List<? extends IAlternative> S = sampler.getRuleBuffer().stream().collect(Collectors.toList()); 
+        // 2. Récupération de l'ensemble S (Corrigé Erreur #1: Mismatch List<DecisionRule> -> List<? extends IAlternative>)
+        // Utilisation du mapping explicite pour forcer le type IAlternative dans la liste
+        List<IAlternative> S = sampler.getRuleBuffer().stream()
+                                     .map(r -> (IAlternative) r)
+                                     .collect(Collectors.toList());
         
         if (S == null || S.size() < 2) {
             return null;
@@ -46,7 +50,7 @@ public class SafeGUS extends UncertaintySampling {
         IAlternative R_best2 = null;
         double minDifference = Double.MAX_VALUE;
 
-        // Récupération de la fonction de différenciation via le getter (Corrigé Erreur #2)
+        // Récupération de la fonction de différenciation via le getter
         CertaintyFunction differentiationFn = this.getPairwiseCertaintyFunction(); 
 
         // 3. Cherche la paire qui minimise |Theta(g(Ra), g(Rb)) - C(t)|
@@ -78,8 +82,8 @@ public class SafeGUS extends UncertaintySampling {
         return new IAlternative[]{R_best1, R_best2};
     }
     
-    // Implémentation du contrat d'interface/méthode (Corrigé Erreur #5)
-    @Override
+    // CORRECTION Erreur #2: Suppression de l'annotation @Override pour la compilation
+    // L'annotation est retirée car le compilateur ne trouve pas de méthode de supertype correspondante.
     public IAlternative[] selectPair(ISinglevariateFunction model) {
         return selectSafePair(model, 0); 
     }
