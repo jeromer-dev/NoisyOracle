@@ -1,6 +1,7 @@
 package sampling;
 
 import java.util.List;
+import java.util.ArrayList; // Ajout nécessaire pour la correction
 
 import lombok.Getter;
 import lombok.Setter;
@@ -59,16 +60,25 @@ public class MMAS {
     public void setNormalizationTechnique(NormalizationMethod norm) {
         getSingleVariateSampler().setNormalizationTechnique(norm);
     }
-    
-    // NOUVELLE METHODE AJOUTÉE POUR SAFEGUS (Résolution Erreur #3)
+
+    // NOUVELLE METHODE AJOUTÉE POUR SAFEGUS (Résolution Erreur de Type #1)
     /**
-     * Retourne le buffer des règles (le "tas" H) accumulé dans MultivariateToSinglevariate.
-     * Pour être compatible avec l'utilisation SafeGUS, nous retournons le top 10 des règles échantillonnées.
+     * Retourne le buffer des règles (le "tas" H) accumulé dans MultivariateToSinglevariate
+     * en aplatissant la List<DecisionRule[]>.
      */
     public List<DecisionRule> getRuleBuffer() {
-        // La méthode getTopK(int) de MultivariateToSinglevariate retourne le buffer interne.
-        // SafeGUS utilise un buffer de taille 10.
-        return getScoringFunction().getTopK(10); 
+        // getTopK(10) retourne List<DecisionRule[]>. Nous devons le convertir en List<DecisionRule>.
+        List<DecisionRule[]> listRuleArrays = getScoringFunction().getTopK(10);
+        
+        // Aplatir (flatten) la List<DecisionRule[]>
+        List<DecisionRule> flatList = new ArrayList<>();
+        for (DecisionRule[] ruleArray : listRuleArrays) {
+            for (DecisionRule rule : ruleArray) {
+                flatList.add(rule);
+            }
+        }
+        
+        return flatList;
     }
     // FIN DE LA NOUVELLE METHODE
 }
