@@ -5,7 +5,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections; // Import ajouté pour le mélange
+import java.util.Collections; // Important pour le shuffle
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -28,22 +28,17 @@ public class ExperimentBaselines {
     private static final int MAX_ITERATIONS = 50;
     private static final String FILENAME = "tictactoe.dat";
     private static final String[] MEASURES = {"support", "confidence", "lift"};
-    
-    // Normalisation globale
     private static double[] globalMaxValues;
 
     public static void main(String[] args) {
         try {
-            System.out.println("=== Lancement des Baselines (Cold Start Corrigé) ===");
+            System.out.println("=== Lancement des Baselines (Comparatif Fiable) ===");
 
             String expDir = "src/test/resources/";
             Set<String> consequents = new HashSet<>(Arrays.asList("positive", "negative", "class", "28", "29"));
             Dataset dataset = new Dataset(filenamePath(expDir, FILENAME), expDir, consequents);
             
-            if (dataset.getNbTransactions() == 0) {
-                System.err.println("Erreur: Dataset vide.");
-                return;
-            }
+            if (dataset.getNbTransactions() == 0) return;
             System.out.println("Dataset chargé : " + dataset.getNbTransactions());
 
             // Normalisation
@@ -80,17 +75,14 @@ public class ExperimentBaselines {
                 public int compare(DecisionRule r1, DecisionRule r2) { return determineTrueDecision(this, r1, r2); }
             };
             
-            // CORRECTION : Jeu de Test Mélangé
+            // --- JEU DE TEST AVEC MELANGE ---
             List<DecisionRule> testRules = generateTestSet(dataset);
-            // On mélange la liste pour casser l'ordre "Règle i > Règle i+1"
-            Collections.shuffle(testRules);
-            System.out.println("Jeu de test généré et mélangé : " + testRules.size() + " règles.");
+            Collections.shuffle(testRules); // INDISPENSABLE pour casser l'ordre implicite
+            System.out.println("Jeu de test mélangé : " + testRules.size() + " règles.");
 
-            // Baseline Bruité
             System.out.println("\n--- Scenario 1: Baseline (Standard AL + Bruit) ---");
             runExperiment(dataset, noisyOracle, testRules, "results_baseline_noisy.csv");
 
-            // Ideal
             System.out.println("\n--- Scenario 2: Ideal (Standard AL + Parfait) ---");
             runExperiment(dataset, perfectOracle, testRules, "results_baseline_ideal.csv");
 
@@ -103,16 +95,16 @@ public class ExperimentBaselines {
         BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile));
         writer.write("Iteration,Accuracy\n");
         
-        // CORRECTION : Initialisation "Epsilon" (très petite mais pas nulle) pour casser la symétrie
-        double[] weights = new double[MEASURES.length]; 
+        // Init poids très faibles et aléatoires (Casse la symétrie)
+        double[] weights = new double[MEASURES.length];
         RandomUtil rng = new RandomUtil();
-        for(int i=0; i<weights.length; i++) weights[i] = 0.0001 * rng.nextDouble(); 
+        for(int i=0; i<weights.length; i++) weights[i] = 0.001 * rng.nextDouble(); 
         
         List<Ranking<IAlternative>> history = new ArrayList<>();
         
-        // Mesure initiale (doit être ~50% maintenant)
-        double initialAcc = computeAccuracy(new NormalizedLinearFunction(weights, globalMaxValues), oracle, testRules);
-        System.out.println("Init : Acc=" + String.format("%.2f", initialAcc * 100) + "%");
+        // Check initial
+        double startAcc = computeAccuracy(new NormalizedLinearFunction(weights, globalMaxValues), oracle, testRules);
+        System.out.println("Départ : " + String.format("%.2f", startAcc*100) + "% (Devrait être ~50%)");
 
         for (int t = 1; t <= MAX_ITERATIONS; t++) {
             DecisionRule[] pair = selectPair(dataset, new NormalizedLinearFunction(weights, globalMaxValues));
@@ -120,11 +112,9 @@ public class ExperimentBaselines {
             if (pair != null) {
                 ISinglevariateFunction currentModel = new NormalizedLinearFunction(weights, globalMaxValues);
                 IAlternative preferred = oracle.getNoisyPreferredAlternative(pair[0], pair[1], currentModel);
-                
                 Ranking<IAlternative> ranking;
                 if (preferred.equals(pair[0])) ranking = new Ranking<>(new IAlternative[]{pair[0], pair[1]}, new Double[]{1.0, 0.0});
                 else ranking = new Ranking<>(new IAlternative[]{pair[1], pair[0]}, new Double[]{1.0, 0.0});
-                
                 history.add(ranking);
                 weights = doLearnStep(weights, globalMaxValues, history);
             }
@@ -134,47 +124,32 @@ public class ExperimentBaselines {
             writer.flush();
             
             if (t % 10 == 0) {
-                System.out.print("Iter " + t + " : Acc=" + String.format("%.2f", acc * 100) + "%");
-                // Normalisation visuelle pour l'affichage
-                double s = 0; for(double w : weights) s+=w;
-                double[] normW = new double[3];
-                if(s>0) for(int i=0; i<3; i++) normW[i] = weights[i]/s;
-                System.out.println(" | W=" + Arrays.toString(Arrays.stream(normW).map(d->Math.round(d*100.0)/100.0).toArray()));
+                System.out.println("Iter " + t + " : Acc=" + String.format("%.2f", acc * 100) + "%");
             }
         }
         writer.close();
     }
 
-    private static double[] doLearnStep(double[] currentWeights, double[] maxValues, List<Ranking<IAlternative>> history) {
-        double learningRate = 0.05; // Un peu plus fort pour décoller de 0
-        int epochs = 20;
-        int dim = currentWeights.length;
-        double[] weights = Arrays.copyOf(currentWeights, dim);
-        NormalizedLinearFunction temp = new NormalizedLinearFunction(weights, maxValues);
-
-        for (int e = 0; e < epochs; e++) {
-            for (Ranking<IAlternative> rank : history) {
-                IAlternative w = rank.getObjects()[0];
-                IAlternative l = rank.getObjects()[1];
-                double sW = temp.computeScore(w);
-                double sL = temp.computeScore(l);
-                
-                double prob = 1.0 / (1.0 + Math.exp(-(sW - sL)));
-                double grad = 1.0 - prob;
-
-                for (int i = 0; i < dim; i++) {
-                    double nW = w.getVector()[i] / maxValues[i];
-                    double nL = l.getVector()[i] / maxValues[i];
-                    weights[i] += learningRate * grad * (nW - nL);
-                    if (weights[i] < 0) weights[i] = 0;
-                }
-                temp = new NormalizedLinearFunction(weights, maxValues);
-            }
-        }
-        return weights;
+    // --- Helpers de Vérité Terrain (Robustes) ---
+    private static IAlternative determineTrueWinner(HumanLikeNoisyOracle oracle, DecisionRule r1, DecisionRule r2) {
+        return (determineTrueDecision(oracle, r1, r2) < 0) ? r1 : r2;
     }
 
-    // --- Helpers inchangés ---
+    private static int determineTrueDecision(HumanLikeNoisyOracle oracle, DecisionRule r1, DecisionRule r2) {
+        // Tie-Breaker hiérarchique pour toujours avoir une décision
+        try {
+            double s1 = oracle.computeScore(r1);
+            double s2 = oracle.computeScore(r2);
+            if (Math.abs(s1 - s2) > 0.0001) return (s1 > s2) ? -1 : 1;
+        } catch (Exception e) {} // Ignorer les erreurs de calcul Phi
+
+        if (r1.getFreqZ() != r2.getFreqZ()) return (r1.getFreqZ() > r2.getFreqZ()) ? -1 : 1;
+        if (r1.getFreqY() != r2.getFreqY()) return (r1.getFreqY() > r2.getFreqY()) ? -1 : 1;
+        
+        return (r1.hashCode() > r2.hashCode()) ? -1 : 1;
+    }
+    
+    // --- Helpers inchangés mais nécessaires pour la compilation ---
     private static DecisionRule[] selectPair(Dataset dataset, ISinglevariateFunction model) {
         List<DecisionRule> pool = dataset.getRandomValidRules(50, 0.1, MEASURES);
         if (pool.size() < 2) return null;
@@ -189,25 +164,34 @@ public class ExperimentBaselines {
         return new DecisionRule[]{r1, r2};
     }
 
-    private static IAlternative determineTrueWinner(HumanLikeNoisyOracle oracle, DecisionRule r1, DecisionRule r2) {
-        return (determineTrueDecision(oracle, r1, r2) < 0) ? r1 : r2;
-    }
-
-    private static int determineTrueDecision(HumanLikeNoisyOracle oracle, DecisionRule r1, DecisionRule r2) {
-        try {
-            double s1 = oracle.computeScore(r1);
-            double s2 = oracle.computeScore(r2);
-            if (s1 > s2) return -1;
-            if (s2 > s1) return 1;
-        } catch (Exception e) {} 
-        if (r1.getFreqZ() > r2.getFreqZ()) return -1;
-        if (r2.getFreqZ() > r1.getFreqZ()) return 1;
-        return (r1.hashCode() > r2.hashCode()) ? -1 : 1;
+    private static double[] doLearnStep(double[] currentWeights, double[] maxValues, List<Ranking<IAlternative>> history) {
+        double learningRate = 0.05; 
+        int epochs = 50;
+        int dim = currentWeights.length;
+        double[] weights = Arrays.copyOf(currentWeights, dim);
+        NormalizedLinearFunction temp = new NormalizedLinearFunction(weights, maxValues);
+        for (int e = 0; e < epochs; e++) {
+            for (Ranking<IAlternative> rank : history) {
+                IAlternative w = rank.getObjects()[0];
+                IAlternative l = rank.getObjects()[1];
+                double sW = temp.computeScore(w);
+                double sL = temp.computeScore(l);
+                double prob = 1.0 / (1.0 + Math.exp(-(sW - sL)));
+                double grad = 1.0 - prob;
+                for (int i = 0; i < dim; i++) {
+                    double nW = w.getVector()[i] / maxValues[i];
+                    double nL = l.getVector()[i] / maxValues[i];
+                    weights[i] += learningRate * grad * (nW - nL);
+                    if (weights[i] < 0) weights[i] = 0;
+                }
+                temp = new NormalizedLinearFunction(weights, maxValues);
+            }
+        }
+        return weights;
     }
 
     private static double computeAccuracy(ISinglevariateFunction model, HumanLikeNoisyOracle oracle, List<DecisionRule> rules) {
         int correct = 0, total = 0;
-        // CORRECTION : On compare maintenant r[i] avec r[i+1] dans la liste MELANGEE
         for (int i = 0; i < rules.size() - 1; i += 2) {
             DecisionRule r1 = rules.get(i);
             DecisionRule r2 = rules.get(i+1);

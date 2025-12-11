@@ -91,10 +91,10 @@ public class Dataset {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.trim().isEmpty()) continue;
-                String[] values = line.split("[,\\s]+"); // Sépare par virgule ou espace
+                String[] values = line.split("[,\\s]+");
                 List<String> validValues = new ArrayList<>();
-                for (String v : values) if (!v.isEmpty()) validValues.add(v);
-                transactions.add(validValues.toArray(new String[0]));
+                for (String v : values) if (!v.isEmpty()) validValues.add(v.trim());
+                if(!validValues.isEmpty()) transactions.add(validValues.toArray(new String[0]));
             }
         }
         String[][] transactionArray = new String[transactions.size()][];
@@ -118,12 +118,15 @@ public class Dataset {
         RandomUtil random = new RandomUtil();
         int nbTransactions = this.getTransactions().length;
         List<DecisionRule> rules = new ArrayList<>();
-        int attempts = 0;
         
-        while (rules.size() < nbRules && attempts < nbRules * 200) {
+        int attempts = 0;
+        int maxAttempts = nbRules * 200;
+
+        while (rules.size() < nbRules && attempts < maxAttempts) {
             attempts++;
             int transactionIndex = random.nextInt(nbTransactions);
             String[] transaction = this.getTransactions()[transactionIndex];
+
             List<String> shuffledItems = new ArrayList<>(Arrays.asList(transaction));
             Collections.shuffle(shuffledItems);
 
@@ -143,7 +146,16 @@ public class Dataset {
                     if (random.Bernoulli(0.5)) selectedDecisionRule.addToX(item);
                 }
             }
-            if (selectedDecisionRule.getFreqZ() > 0) rules.add(selectedDecisionRule);
+            
+            // CORRECTION CRITIQUE : Éliminer les règles triviales (0% ou 100% de couverture)
+            // Cela évite les divisions par zéro dans le calcul de Phi (Chi-Carré)
+            int fZ = selectedDecisionRule.getFreqZ();
+            int fX = selectedDecisionRule.getFreqX();
+            int fY = selectedDecisionRule.getFreqY();
+            
+            if (fZ > 0 && fZ < nbTransactions && fX > 0 && fX < nbTransactions && fY > 0 && fY < nbTransactions) {
+                rules.add(selectedDecisionRule);
+            }
         }
         return rules;
     }
