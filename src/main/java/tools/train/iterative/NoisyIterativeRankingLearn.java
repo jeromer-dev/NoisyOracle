@@ -27,8 +27,6 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
     private final int maxIterations;
     
     private List<Ranking<IAlternative>> preferenceHistory;
-    
-    // Poids et Maxima pour la normalisation
     private double[] currentWeights;
     private double[] maxValues; 
 
@@ -49,13 +47,12 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
 
     @Override
     public FunctionParameters learnFromRankings(List<Ranking<IAlternative>> rankings) throws Exception {
-        return new FunctionParameters(); 
+        return new FunctionParameters();
     }
 
     @Override
     public FunctionParameters learn() throws Exception {
         ISinglevariateFunction finalFunction = runIterativeLearning();
-        
         FunctionParameters params = new FunctionParameters();
         if (this.currentWeights != null) {
             params.setWeights(this.currentWeights);
@@ -69,7 +66,6 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
         ISinglevariateFunction currentModel = new LinearScoreFunction(); 
         
         for (int t = 1; t <= maxIterations; t++) {
-            
             NoisyLearnStep stepStart = new NoisyLearnStep(currentModel, preferenceHistory, t);
             getSupport().firePropertyChange("step", null, stepStart);
 
@@ -78,20 +74,14 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
             IAlternative preferred = null;
             boolean isExploration = (gamma < alpha);
 
-            // --- Phase de Sélection ---
             if (isExploration) {
                 pairToQuery = safeGus.selectSafePair(currentModel, t);
-                if (pairToQuery != null) {
-                    preferred = noisyOracle.getNoisyPreferredAlternative(pairToQuery[0], pairToQuery[1], currentModel);
-                }
+                if (pairToQuery != null) preferred = noisyOracle.getNoisyPreferredAlternative(pairToQuery[0], pairToQuery[1], currentModel);
             } else {
                 pairToQuery = correctionStrategy.findMostInconsistentPair(preferenceHistory, currentModel);
-                if (pairToQuery != null) {
-                    preferred = noisyOracle.getNoisyPreferredAlternative(pairToQuery[0], pairToQuery[1], currentModel);
-                }
+                if (pairToQuery != null) preferred = noisyOracle.getNoisyPreferredAlternative(pairToQuery[0], pairToQuery[1], currentModel);
             }
             
-            // --- Mise à jour ---
             if (pairToQuery != null) {
                 updateMaxValues(pairToQuery[0]);
                 updateMaxValues(pairToQuery[1]);
@@ -101,10 +91,10 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
                     IAlternative other = preferred.equals(pairToQuery[0]) ? pairToQuery[1] : pairToQuery[0];
                     newRanking = new Ranking<>(new IAlternative[]{preferred, other}, new Double[]{1.0, 0.0});
                 } else {
+                    // Indifférence rare maintenant grâce à l'Oracle corrigé, mais géré au cas où
                     newRanking = new Ranking<>(new IAlternative[]{pairToQuery[0], pairToQuery[1]}, new Double[]{0.5, 0.5});
                 }
                 preferenceHistory.add(newRanking);
-                
                 currentModel = doLearnStep(currentModel, preferenceHistory);
             }
             System.out.println("Iteration " + t + " completed.");
@@ -119,22 +109,15 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
             Arrays.fill(this.maxValues, 1.0); 
         }
         for (int i = 0; i < vec.length; i++) {
-            if (Math.abs(vec[i]) > this.maxValues[i]) {
-                this.maxValues[i] = Math.abs(vec[i]);
-            }
+            if (Math.abs(vec[i]) > this.maxValues[i]) this.maxValues[i] = Math.abs(vec[i]);
         }
     }
 
-    /**
-     * Apprentissage par Régression Logistique (Soft Updates).
-     * Beaucoup plus stable que le Perceptron face au bruit.
-     */
     protected ISinglevariateFunction doLearnStep(ISinglevariateFunction current, List<Ranking<IAlternative>> history) {
         if (history.isEmpty()) return current;
-
         int dim = history.get(0).getObjects()[0].getVector().length;
 
-        // 1. Initialisation
+        // Init aléatoire
         if (this.currentWeights == null) {
             this.currentWeights = new double[dim];
             double sum = 0;
@@ -145,8 +128,8 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
             for(int i=0; i<dim; i++) this.currentWeights[i] /= sum;
         }
 
-        // 2. Paramètres (Taux faible + Beaucoup d'epochs = Stabilité)
-        double learningRate = 0.01; 
+        // PARAMETRES D'APPRENTISSAGE
+        double learningRate = 0.01; // Ajusté pour TicTacToe
         int epochs = 100;
         
         NormalizedLinearFunction tempModel = new NormalizedLinearFunction(currentWeights, maxValues);
@@ -156,21 +139,15 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
                 IAlternative winner = rank.getObjects()[0];
                 IAlternative loser = rank.getObjects()[1];
                 
-                // Si égalité (indifférence), on saute pour l'instant
                 Double[] scores = rank.getScores();
                 if (scores != null && scores[0].equals(scores[1])) continue;
 
-                // Prédiction (Normalisée)
                 double sW = tempModel.computeScore(winner);
                 double sL = tempModel.computeScore(loser);
                 
-                // --- MISE A JOUR TYPE RANKNET / LOGISTIQUE ---
-                // On calcule la probabilité que W gagne selon le modèle actuel : P = 1 / (1 + exp(-(sW - sL)))
-                // L'objectif est que P soit proche de 1.0
+                // RankNet Gradient
                 double diff = sW - sL;
                 double prob = 1.0 / (1.0 + Math.exp(-diff));
-                
-                // Gradient : (Cible - Probabilité) = (1.0 - prob)
                 double gradient = 1.0 - prob;
 
                 double[] vecW = winner.getVector();
@@ -180,26 +157,17 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
                     double normW = vecW[i] / maxValues[i];
                     double normL = vecL[i] / maxValues[i];
                     
-                    // Update proportionnel à l'erreur de probabilité
                     this.currentWeights[i] += learningRate * gradient * (normW - normL);
-                    
-                    // Contrainte de positivité
                     if (this.currentWeights[i] < 0) this.currentWeights[i] = 0;
                 }
-                
-                // Mise à jour du modèle temporaire
                 tempModel = new NormalizedLinearFunction(currentWeights, maxValues);
             }
         }
-
-        // 3. Normalisation finale
+        
+        // Normalisation
         double sum = 0.0;
         for (double w : this.currentWeights) sum += w;
-        if (sum > 0) {
-            for (int i = 0; i < dim; i++) this.currentWeights[i] /= sum;
-        } else {
-             for (int i = 0; i < dim; i++) this.currentWeights[i] = 1.0 / dim;
-        }
+        if (sum > 0) for (int i = 0; i < dim; i++) this.currentWeights[i] /= sum;
 
         return new NormalizedLinearFunction(this.currentWeights, this.maxValues);
     }
@@ -207,13 +175,11 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
     private static class NormalizedLinearFunction extends LinearScoreFunction {
         private final double[] maxValues;
         private final double[] weights;
-
         public NormalizedLinearFunction(double[] weights, double[] maxValues) {
             super(weights);
             this.weights = weights;
             this.maxValues = maxValues;
         }
-
         @Override
         public double computeScore(IAlternative alt) {
             double score = 0.0;
@@ -226,9 +192,6 @@ public class NoisyIterativeRankingLearn extends IterativeRankingLearn {
             }
             return score;
         }
-        
-        public double computeScore(DecisionRule rule) {
-             return computeScore((IAlternative) rule);
-        }
+        public double computeScore(DecisionRule rule) { return computeScore((IAlternative) rule); }
     }
 }
