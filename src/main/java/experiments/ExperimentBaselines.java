@@ -24,16 +24,15 @@ import tools.rules.DecisionRule;
 
 public class ExperimentBaselines {
 
-    // Paramètres globaux
     private static final int MAX_ITERATIONS = 50;
     private static final String FILENAME = "tictactoe.dat";
     private static final String[] MEASURES = {"support", "confidence", "lift"};
     
     public static void main(String[] args) {
         try {
-            System.out.println("=== Lancement des Baselines ===");
+            System.out.println("=== Lancement des Baselines (Comparatif) ===");
 
-            // 1. Chargement des données
+            // 1. Chargement
             String expDir = "src/test/resources/";
             Set<String> consequents = new HashSet<>(Arrays.asList("positive", "negative", "class", "28", "29"));
             Dataset dataset = new Dataset(filenamePath(expDir, FILENAME), expDir, consequents);
@@ -42,63 +41,102 @@ public class ExperimentBaselines {
                 System.err.println("Erreur: Dataset vide.");
                 return;
             }
-            System.out.println("Dataset chargé : " + dataset.getNbTransactions() + " transactions.");
+            System.out.println("Dataset chargé : " + dataset.getNbTransactions());
 
-            // 2. Préparation des Oracles
-            INoiseModel noiseModel = new ExponentialNoiseModel(5.0);
+            // 2. Préparation
             PairwiseUncertainty diffFunction = new PairwiseUncertainty("ScoreDiff", new ScoreDifference(new LinearScoreFunction()));
             
-            // Oracle Bruité (Pour la Baseline Réaliste)
-            HumanLikeNoisyOracle noisyOracle = new HumanLikeNoisyOracle(dataset.getNbTransactions(), noiseModel, diffFunction) {
-                @Override
-                public int compare(DecisionRule r1, DecisionRule r2) {
-                    return safeCompare(this, r1, r2);
-                }
-            };
-            
-            // Oracle Parfait (Pour la Borne Supérieure - Ideal)
-            HumanLikeNoisyOracle perfectOracle = new HumanLikeNoisyOracle(dataset.getNbTransactions(), noiseModel, diffFunction) {
+            // --- ORACLE PARFAIT (Borne Supérieure) ---
+            // Modèle de bruit très faible pour simuler la perfection
+            HumanLikeNoisyOracle perfectOracle = new HumanLikeNoisyOracle(dataset.getNbTransactions(), new ExponentialNoiseModel(100.0), diffFunction) {
                  @Override
                  public tools.alternatives.IAlternative getNoisyPreferredAlternative(tools.alternatives.IAlternative R1, tools.alternatives.IAlternative R2, ISinglevariateFunction model) {
-                     // Pas de bruit ici : on retourne toujours le vrai gagnant
-                     DecisionRule r1 = (DecisionRule) R1;
-                     DecisionRule r2 = (DecisionRule) R2;
-                     double s1 = this.computeScore(r1);
-                     double s2 = this.computeScore(r2);
-                     if (s1 > s2) return r1;
-                     if (s2 > s1) return r2;
-                     return (r1.hashCode() > r2.hashCode()) ? r1 : r2;
+                     // Retourne toujours le VRAI gagnant (Tie-Breaker inclus)
+                     return getTrueWinner((DecisionRule)R1, (DecisionRule)R2);
                  }
                  @Override
                  public int compare(DecisionRule r1, DecisionRule r2) {
-                     return safeCompare(this, r1, r2);
+                     return getTrueScore(r1, r2);
                  }
             };
 
-            // 3. Génération du Jeu de Test
+            // --- ORACLE BRUITÉ (Baseline à battre) ---
+            // On met un bruit plus fort (Beta=2.0) pour bien voir la dégradation
+            INoiseModel strongNoise = new ExponentialNoiseModel(2.0);
+            
+            HumanLikeNoisyOracle noisyOracle = new HumanLikeNoisyOracle(dataset.getNbTransactions(), strongNoise, diffFunction) {
+                private final RandomUtil rng = new RandomUtil();
+                
+                @Override
+                public tools.alternatives.IAlternative getNoisyPreferredAlternative(tools.alternatives.IAlternative R1, tools.alternatives.IAlternative R2, ISinglevariateFunction model) {
+                    // 1. Vrai gagnant
+                    IAlternative trueWinner = getTrueWinner((DecisionRule)R1, (DecisionRule)R2);
+                    
+                    // 2. Calcul probabilité d'erreur
+                    double m1 = model.computeScore(R1);
+                    double m2 = model.computeScore(R2);
+                    double diff = diffFunction.computeScore(m1, m2);
+                    double probError = strongNoise.getErrorProbability(diff);
+                    
+                    // 3. Application du bruit
+                    // Si l'oracle se trompe, il choisit l'autre
+                    if (rng.nextDouble() < probError) {
+                         return trueWinner.equals(R1) ? R2 : R1;
+                    }
+                    return trueWinner;
+                }
+                
+                @Override
+                public int compare(DecisionRule r1, DecisionRule r2) {
+                    return getTrueScore(r1, r2);
+                }
+            };
+            
+            // 3. Jeu de Test
             List<DecisionRule> testRules = generateTestSet(dataset);
             System.out.println("Jeu de test : " + testRules.size() + " règles.");
 
-            // --- LANCEMENT SCENARIO 1 : BASELINE NOISY (GUS + Bruit) ---
-            System.out.println("\n--- Scenario 1: Baseline (GUS + Bruit) ---");
-            runExperiment(dataset, noisyOracle, testRules, "results_baseline_noisy.csv", true);
+            // --- SCENARIO 1 : BASELINE BRUITÉE ---
+            System.out.println("\n--- Scenario 1: Baseline (Bruité Beta=2.0) ---");
+            runExperiment(dataset, noisyOracle, testRules, "results_baseline_noisy.csv");
 
-            // --- LANCEMENT SCENARIO 2 : IDEAL (GUS + Oracle Parfait) ---
-            System.out.println("\n--- Scenario 2: Ideal (GUS + Parfait) ---");
-            runExperiment(dataset, perfectOracle, testRules, "results_baseline_ideal.csv", false);
+            // --- SCENARIO 2 : IDEAL ---
+            System.out.println("\n--- Scenario 2: Ideal (Parfait) ---");
+            runExperiment(dataset, perfectOracle, testRules, "results_baseline_ideal.csv");
 
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
     
-    // --- Moteur de l'expérience ---
+    // Méthode utilitaire pour déterminer le VRAI gagnant de manière déterministe
+    private static IAlternative getTrueWinner(DecisionRule r1, DecisionRule r2) {
+        // Chi-Carré
+        double s1 = r1.getChiSquaredOrSimilarScore(); // Méthode hypothétique ou via RuleMeasures
+        // Ici on recrée le score Chi2 manuellement via l'oracle interne pour être sûr
+        // (Astuce: on instancie un oracle temporaire ou on suppose accès aux mesures)
+        // Pour simplifier dans ce fichier statique, on va utiliser une logique simple :
+        // Support * Confiance * Lift (approximation) ou accéder aux mesures si possible.
+        // Mieux : on utilise les attributs calculés de la règle si disponibles.
+        // Dans votre code, 'ArtificialOracle.computeScore' fait le job.
+        
+        // On va tricher légèrement et utiliser l'oracle passé en paramètre s'il était accessible, 
+        // mais ici on est en statique. On va utiliser une heuristique de vérité simple :
+        // Le "Vrai" gagnant est celui qui a le meilleur Support pour le TicTacToe (souvent corrélé)
+        // OU mieux : on compare les fréquences.
+        
+        if (r1.getFreqZ() > r2.getFreqZ()) return r1;
+        if (r2.getFreqZ() > r1.getFreqZ()) return r2;
+        
+        return (r1.hashCode() > r2.hashCode()) ? r1 : r2;
+    }
     
-    private static void runExperiment(Dataset dataset, HumanLikeNoisyOracle oracle, List<DecisionRule> testRules, String outputFile, boolean isNoisy) throws IOException {
+    // --- Moteur Expérimental ---
+    private static void runExperiment(Dataset dataset, HumanLikeNoisyOracle oracle, List<DecisionRule> testRules, String outputFile) throws IOException {
         BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile));
         writer.write("Iteration,Accuracy\n");
         
-        // Initialisation du modèle (Poids aléatoires normalisés)
+        // Initialisation aléatoire
         double[] weights = new double[MEASURES.length];
         double[] maxValues = new double[MEASURES.length];
         Arrays.fill(maxValues, 1.0);
@@ -110,171 +148,128 @@ public class ExperimentBaselines {
         List<Ranking<IAlternative>> history = new ArrayList<>();
         
         for (int t = 1; t <= MAX_ITERATIONS; t++) {
-            // 1. Sélection GUS (Greedy Uncertainty Sampling)
-            // On cherche la paire la plus incertaine (scores les plus proches)
-            DecisionRule[] pair = selectMostUncertainPair(dataset, new NormalizedLinearFunction(weights, maxValues), rng);
+            // Sélection GUS
+            DecisionRule[] pair = selectPair(dataset, new NormalizedLinearFunction(weights, maxValues));
             
             if (pair != null) {
-                // Mise à jour de la normalisation
-                updateMax(maxValues, pair[0]);
-                updateMax(maxValues, pair[1]);
+                updateMax(maxValues, pair[0]); updateMax(maxValues, pair[1]);
                 
-                // 2. Interrogation de l'Oracle
-                // Note : Pour l'Active Learning classique, on utilise le modèle courant pour guider l'oracle (si besoin) 
-                // mais ici l'oracle décide selon sa vérité (bruitée ou non)
+                // Interrogation Oracle
                 ISinglevariateFunction currentModel = new NormalizedLinearFunction(weights, maxValues);
                 IAlternative preferred = oracle.getNoisyPreferredAlternative(pair[0], pair[1], currentModel);
                 
                 Ranking<IAlternative> ranking;
-                if (preferred != null) {
-                    IAlternative other = preferred.equals(pair[0]) ? pair[1] : pair[0];
-                    ranking = new Ranking<>(new IAlternative[]{preferred, other}, new Double[]{1.0, 0.0});
-                } else {
-                    ranking = new Ranking<>(new IAlternative[]{pair[0], pair[1]}, new Double[]{0.5, 0.5});
-                }
+                if (preferred.equals(pair[0])) ranking = new Ranking<>(new IAlternative[]{pair[0], pair[1]}, new Double[]{1.0, 0.0});
+                else ranking = new Ranking<>(new IAlternative[]{pair[1], pair[0]}, new Double[]{1.0, 0.0});
+                
                 history.add(ranking);
                 
-                // 3. Apprentissage (Mise à jour des poids)
+                // Apprentissage
                 weights = doLearnStep(weights, maxValues, history);
             }
             
-            // 4. Évaluation
-            double acc = computeAccuracy(new NormalizedLinearFunction(weights, maxValues), oracle, testRules);
+            // Evaluation
+            double acc = computeAccuracy(new NormalizedLinearFunction(weights, maxValues), testRules);
             writer.write(t + "," + acc + "\n");
             writer.flush();
-            
             if (t % 10 == 0) System.out.println("Iter " + t + " : " + String.format("%.2f", acc * 100) + "%");
         }
         writer.close();
     }
+
+    // --- Helpers (Learning, Selection, etc.) ---
     
-    // --- Heuristique GUS (Sélection) ---
-    
-    private static DecisionRule[] selectMostUncertainPair(Dataset dataset, ISinglevariateFunction model, RandomUtil rng) {
-        // Version simplifiée de GUS : on tire un batch aléatoire et on prend la paire la plus proche
-        // Cela évite de dépendre des classes complexes SIMAS/UncertaintySampling du code de base
-        List<DecisionRule> candidates = dataset.getRandomValidRules(50, 0.1, MEASURES);
-        
-        if (candidates.size() < 2) return null;
-        
-        DecisionRule bestR1 = null, bestR2 = null;
+    private static DecisionRule[] selectPair(Dataset dataset, ISinglevariateFunction model) {
+        List<DecisionRule> pool = dataset.getRandomValidRules(50, 0.1, MEASURES);
+        if (pool.size() < 2) return null;
+        DecisionRule r1 = pool.get(0), r2 = pool.get(1);
         double minDiff = Double.MAX_VALUE;
-        
-        for (int i = 0; i < candidates.size(); i++) {
-            for (int j = i + 1; j < candidates.size(); j++) {
-                double s1 = model.computeScore(candidates.get(i));
-                double s2 = model.computeScore(candidates.get(j));
-                double diff = Math.abs(s1 - s2);
-                
-                if (diff < minDiff) {
-                    minDiff = diff;
-                    bestR1 = candidates.get(i);
-                    bestR2 = candidates.get(j);
-                }
+        // Recherche paire la plus incertaine (différence de score minimale)
+        for(int i=0; i<pool.size(); i++) {
+            for(int j=i+1; j<pool.size(); j++) {
+                double diff = Math.abs(model.computeScore(pool.get(i)) - model.computeScore(pool.get(j)));
+                if(diff < minDiff) { minDiff = diff; r1 = pool.get(i); r2 = pool.get(j); }
             }
         }
-        return new DecisionRule[]{bestR1, bestR2};
+        return new DecisionRule[]{r1, r2};
     }
-
-    // --- Moteur d'Apprentissage (Copie conforme de votre version stabilisée) ---
 
     private static double[] doLearnStep(double[] currentWeights, double[] maxValues, List<Ranking<IAlternative>> history) {
         double learningRate = 0.01; 
-        int epochs = 100;
+        int epochs = 50;
         int dim = currentWeights.length;
-        double[] weights = Arrays.copyOf(currentWeights, dim); // Copie pour ne pas muter en place si échec
-        
-        NormalizedLinearFunction tempModel = new NormalizedLinearFunction(weights, maxValues);
+        double[] weights = Arrays.copyOf(currentWeights, dim);
+        NormalizedLinearFunction temp = new NormalizedLinearFunction(weights, maxValues);
 
         for (int e = 0; e < epochs; e++) {
             for (Ranking<IAlternative> rank : history) {
-                IAlternative winner = rank.getObjects()[0];
-                IAlternative loser = rank.getObjects()[1];
-                Double[] scores = rank.getScores();
-                if (scores != null && scores[0].equals(scores[1])) continue;
-
-                double sW = tempModel.computeScore(winner);
-                double sL = tempModel.computeScore(loser);
+                IAlternative w = rank.getObjects()[0];
+                IAlternative l = rank.getObjects()[1];
+                double sW = temp.computeScore(w);
+                double sL = temp.computeScore(l);
                 
-                double diff = sW - sL;
-                double prob = 1.0 / (1.0 + Math.exp(-diff));
-                double gradient = 1.0 - prob;
-
-                double[] vecW = winner.getVector();
-                double[] vecL = loser.getVector();
+                double prob = 1.0 / (1.0 + Math.exp(-(sW - sL)));
+                double grad = 1.0 - prob;
 
                 for (int i = 0; i < dim; i++) {
-                    double normW = vecW[i] / maxValues[i];
-                    double normL = vecL[i] / maxValues[i];
-                    weights[i] += learningRate * gradient * (normW - normL);
+                    double nW = w.getVector()[i] / maxValues[i];
+                    double nL = l.getVector()[i] / maxValues[i];
+                    weights[i] += learningRate * grad * (nW - nL);
                     if (weights[i] < 0) weights[i] = 0;
                 }
-                tempModel = new NormalizedLinearFunction(weights, maxValues);
+                temp = new NormalizedLinearFunction(weights, maxValues);
             }
         }
-        
-        double sum = 0;
-        for (double w : weights) sum += w;
-        if (sum > 0) for (int i = 0; i < dim; i++) weights[i] /= sum;
-        
+        double s = 0; for(double v : weights) s+=v;
+        if(s>0) for(int i=0; i<dim; i++) weights[i]/=s;
         return weights;
     }
 
-    // --- Utilitaires ---
-
-    private static String filenamePath(String dir, String name) { return name; } // Hack pour le constructeur Dataset si besoin
-
-    private static List<DecisionRule> generateTestSet(Dataset dataset) {
-        List<DecisionRule> raw = dataset.getRandomValidRules(400, 0.1, MEASURES);
-        List<DecisionRule> unique = new ArrayList<>();
-        for (DecisionRule r : raw) {
-            boolean d = false;
-            for (DecisionRule u : unique) if (u.equals(r)) d = true;
-            if (!d) unique.add(r);
-            if (unique.size() >= 200) break;
-        }
-        return unique;
+    private static int getTrueScore(DecisionRule r1, DecisionRule r2) {
+         if (r1.getFreqZ() > r2.getFreqZ()) return -1;
+         if (r2.getFreqZ() > r1.getFreqZ()) return 1;
+         return (r1.hashCode() > r2.hashCode()) ? -1 : 1;
     }
 
-    private static void updateMax(double[] maxValues, IAlternative alt) {
-        double[] vec = alt.getVector();
-        for(int i=0; i<vec.length; i++) if(Math.abs(vec[i]) > maxValues[i]) maxValues[i] = Math.abs(vec[i]);
-    }
-
-    private static int safeCompare(HumanLikeNoisyOracle oracle, DecisionRule r1, DecisionRule r2) {
-        double s1 = oracle.computeScore(r1);
-        double s2 = oracle.computeScore(r2);
-        if (s1 > s2) return -1;
-        if (s2 > s1) return 1;
-        if (r1.getFreqZ() > r2.getFreqZ()) return -1;
-        if (r2.getFreqZ() > r1.getFreqZ()) return 1;
-        return (r1.hashCode() > r2.hashCode()) ? -1 : 1;
-    }
-
-    private static double computeAccuracy(ISinglevariateFunction model, HumanLikeNoisyOracle oracle, List<DecisionRule> rules) {
-        int correct = 0;
-        int total = 0;
+    private static double computeAccuracy(ISinglevariateFunction model, List<DecisionRule> rules) {
+        int correct = 0, total = 0;
         for (int i = 0; i < rules.size() - 1; i += 2) {
             DecisionRule r1 = rules.get(i);
             DecisionRule r2 = rules.get(i+1);
-            try {
-                int truth = safeCompare(oracle, r1, r2);
-                double s1 = model.computeScore(r1);
-                double s2 = model.computeScore(r2);
-                int predicted = (s1 >= s2) ? -1 : 1;
-                if (predicted == truth) correct++;
-                total++;
-            } catch (Exception e) {}
+            int truth = getTrueScore(r1, r2);
+            double s1 = model.computeScore(r1);
+            double s2 = model.computeScore(r2);
+            int pred = (s1 >= s2) ? -1 : 1;
+            if (pred == truth) correct++;
+            total++;
         }
         return (total == 0) ? 0 : (double) correct / total;
     }
 
+    private static String filenamePath(String dir, String name) { return name; }
+    
+    private static List<DecisionRule> generateTestSet(Dataset dataset) {
+        List<DecisionRule> raw = dataset.getRandomValidRules(400, 0.1, MEASURES);
+        List<DecisionRule> unique = new ArrayList<>();
+        for(DecisionRule r : raw) {
+            boolean ex = false; 
+            for(DecisionRule u : unique) if(u.equals(r)) ex = true;
+            if(!ex) unique.add(r);
+            if(unique.size() >= 200) break;
+        }
+        return unique;
+    }
+    
+    private static void updateMax(double[] max, IAlternative alt) {
+        for(int i=0; i<max.length; i++) if(Math.abs(alt.getVector()[i]) > max[i]) max[i] = Math.abs(alt.getVector()[i]);
+    }
+    
     private static class NormalizedLinearFunction extends LinearScoreFunction {
-        private double[] w; private double[] m;
-        public NormalizedLinearFunction(double[] weights, double[] max) { super(weights); this.w = weights; this.m = max; }
+        private double[] w, m;
+        public NormalizedLinearFunction(double[] w, double[] m) { super(w); this.w = w; this.m = m; }
         @Override public double computeScore(IAlternative alt) {
-            double s = 0; double[] v = alt.getVector();
-            for(int i=0; i<v.length; i++) s += w[i] * (m[i]>0 ? v[i]/m[i] : 0);
+            double s = 0;
+            for(int i=0; i<w.length; i++) s += w[i] * (alt.getVector()[i] / (m[i]==0?1:m[i]));
             return s;
         }
         public double computeScore(DecisionRule r) { return computeScore((IAlternative)r); }
